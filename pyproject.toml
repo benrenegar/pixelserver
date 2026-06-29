@@ -3,12 +3,10 @@ name = "ledpanel-manager"
 version = "0.1.0"
 description = "GTK Linux client for iPixel Color 16x64 BLE LED matrix panels"
 requires-python = ">=3.11"
-dependencies = [
-  "PyGObject>=3.46",
-  "Pillow>=10.0",
-  "bleak>=0.21",
-  "pypixelcolor>=0.4.0",
-]
+dependencies = []
+
+[project.optional-dependencies]
+pypixelcolor = ["pypixelcolor>=0.4.0"]
 
 [project.scripts]
 ledpanel-manager = "ledpanel_manager.app:main"
@@ -17,5 +15,5 @@ ledpanel-manager = "ledpanel_manager.app:main"
 ledpanel_manager = ["fonts/*.ttf"]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"

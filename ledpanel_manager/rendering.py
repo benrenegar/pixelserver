@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import math
 from datetime import datetime
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageSequence, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .models import PANEL_HEIGHT, PANEL_WIDTH, FrameConfig, FrameType
 
 FONT_DIR = Path(__file__).with_name("fonts")

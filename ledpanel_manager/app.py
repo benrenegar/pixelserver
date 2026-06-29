@@ -7,7 +7,7 @@ from gi.repository import Gtk, GLib, Gdk, Gio
 from PIL import Image
 from .models import FrameConfig, FrameType, PanelState, PANEL_WIDTH, PANEL_HEIGHT
 from .rendering import render_frame, FONT_ALIASES
-from .ipixel import IPixelClient, discover_panels, DiscoveredPanel
+from .ipixel import IPixelClient, discover_panels
 
 class PixelPreview(Gtk.DrawingArea):
     def __init__(self):
