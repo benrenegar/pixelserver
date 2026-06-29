@@ -6,7 +6,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .models import PANEL_HEIGHT, PANEL_WIDTH, FrameConfig, FrameType
 
 FONT_DIR = Path(__file__).with_name("fonts")
-FONT_ALIASES = {"VCR OSD Mono": FONT_DIR / "VCR-OSD-Mono.ttf"}
+FONT_ALIASES = {"Phatone": FONT_DIR / "phatone.ttf", 
+"Loxica": FONT_DIR / "v5loxicar.ttf",
+"Square Dance": FONT_DIR / "squaredance00.ttf"}
 DIGITS = {
     "0": ["111","101","101","101","111"], "1": ["010","110","010","010","111"],
     "2": ["111","001","111","100","111"], "3": ["111","001","111","001","111"],
