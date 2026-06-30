@@ -14,6 +14,7 @@ NOTIFY_UUID = "0000fa03-0000-1000-8000-00805f9b34fb"
 DEVICE_PREFIXES = ("LED_BLE", "iPixel", "B.K.Light", "BGLight")
 PNG_CHUNK_SIZE = 244
 ACK_TIMEOUT = 8.0
+LIVE_SCREEN_BUFFER = 0x65
 logger = logging.getLogger(__name__)
 
 
@@ -36,19 +37,23 @@ def _crc32_hex(data_hex: str) -> str:
     return _switch_endian(f"{crc:08x}")
 
 
-def image_to_png_command(image: Image.Image) -> bytes:
+def image_to_png_command(image: Image.Image, buffer_number: int = LIVE_SCREEN_BUFFER) -> bytes:
     """Build the iPixel static PNG command used by iPixel-CLI/send_png."""
     output = io.BytesIO()
     image.convert("RGBA").save(output, format="PNG", compress_level=6)
     png_hex = output.getvalue().hex()
     size = _frame_size_hex(png_hex, 8)
     checksum = _crc32_hex(png_hex)
-    frame_hex = "020000" + size + checksum + "0065" + png_hex
+    frame_hex = "020000" + size + checksum + f"00{buffer_number & 0xFF:02x}" + png_hex
     prefix = _frame_size_hex("FFFF" + frame_hex, 4)
     command = bytes.fromhex(prefix + frame_hex)
     logger.debug("Built PNG command: png_bytes=%d command_bytes=%d crc=%s", len(output.getvalue()), len(command), checksum)
     return command
 
+
+
+def select_screen_command(screen_number: int = LIVE_SCREEN_BUFFER) -> bytes:
+    return bytes([0x05, 0x00, 0x07, 0x80, screen_number & 0xFF])
 
 def image_to_rgb565_bytes(image: Image.Image) -> bytes:
     data = bytearray()
@@ -90,15 +95,23 @@ class IPixelClient:
     async def connect(self) -> None:
         try:
             from pypixelcolor import IPixelDevice  # type: ignore
-            self._pypixel = IPixelDevice(self.address)
-            maybe = self._pypixel.connect()
-            if asyncio.iscoroutine(maybe):
-                await maybe
-            logger.info("Connected to %s using pypixelcolor", self.address)
-            return
+        except ModuleNotFoundError:
+            logger.info("pypixelcolor is not installed; using built-in bleak transport")
+            IPixelDevice = None
         except Exception:
-            logger.debug("pypixelcolor transport unavailable; falling back to bleak", exc_info=True)
-            self._pypixel = None
+            logger.warning("Unable to import pypixelcolor; using built-in bleak transport", exc_info=True)
+            IPixelDevice = None
+        if IPixelDevice is not None:
+            try:
+                self._pypixel = IPixelDevice(self.address)
+                maybe = self._pypixel.connect()
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+                logger.info("Connected to %s using pypixelcolor", self.address)
+                return
+            except Exception:
+                logger.warning("pypixelcolor connection failed; falling back to bleak", exc_info=True)
+                self._pypixel = None
         from bleak import BleakClient
         self._client = BleakClient(self.address)
         await self._client.connect()
@@ -108,6 +121,7 @@ class IPixelClient:
         except Exception:
             logger.warning("Unable to enable notify characteristic %s", NOTIFY_UUID, exc_info=True)
         await self._write_command(bytes.fromhex("0500070101"), wait_for_ack=False)
+        await self._write_command(bytes.fromhex("0500040101"), wait_for_ack=False)
         logger.info("Connected to %s using bleak", self.address)
 
     async def disconnect(self) -> None:
@@ -143,6 +157,7 @@ class IPixelClient:
             raise RuntimeError("pypixelcolor device has no supported image sending method")
         command = image_to_png_command(image)
         await self._write_command(command)
+        await self._write_command(select_screen_command(LIVE_SCREEN_BUFFER), wait_for_ack=False)
 
     async def _write_command(self, data: bytes, *, wait_for_ack: bool = True) -> None:
         if self._client is None:

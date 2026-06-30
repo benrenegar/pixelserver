@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, logging, threading, time
+import asyncio, logging, os, threading, time
 import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GLib, Gdk, Gio
@@ -9,7 +9,10 @@ from .models import FrameConfig, FrameType, PanelState, PANEL_WIDTH, PANEL_HEIGH
 from .rendering import render_frame, FONT_ALIASES
 from .ipixel import IPixelClient, discover_panels
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+LOG_LEVEL = os.environ.get("LEDPANEL_LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+logging.getLogger("bleak").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 class PixelPreview(Gtk.DrawingArea):
