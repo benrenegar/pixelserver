@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-pypixelcolor = ["pypixelcolor>=0.4.0"]
+pypixelcolor = ["pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git"]
 
 [project.scripts]
 ledpanel-manager = "ledpanel_manager.app:main"

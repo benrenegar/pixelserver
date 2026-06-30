@@ -13,7 +13,7 @@ A Debian/Linux GTK client for iPixel Color BLE LED matrix panels, initially targ
 
 ## Run on Debian 13
 
-Debian 13 follows PEP 668, so `python3 -m pip install --user -e .` can fail with `externally-managed-environment`. Use Debian packages for runtime dependencies, then either run from the checkout or install the console script inside a virtual environment.
+Debian 13 follows PEP 668, so `python3 -m pip install --user -e .` can fail with `externally-managed-environment`. Use Debian packages for runtime dependencies, then either run from the checkout or install the console script inside a virtual environment. The virtual environment option is recommended if you want the app to use `pypixelcolor`, because Debian's `/usr/bin/python3` will not automatically import packages just because a `pypixelcolor` command exists in `~/.local/bin`.
 
 ### Option A: run directly from the checkout
 
@@ -22,7 +22,7 @@ sudo apt install python3-gi gir1.2-gtk-4.0 python3-pil python3-bleak
 python3 -m ledpanel_manager.app
 ```
 
-### Option B: install an editable console script in a virtual environment
+### Option B: install an editable console script in a virtual environment (recommended for pypixelcolor)
 
 `--system-site-packages` lets the venv use Debian's GTK/Pillow/bleak packages instead of trying to replace them with pip-managed copies.
 
@@ -30,23 +30,29 @@ python3 -m ledpanel_manager.app
 sudo apt install python3-gi gir1.2-gtk-4.0 python3-pil python3-bleak python3-venv python3-setuptools
 python3 -m venv --system-site-packages .venv
 . .venv/bin/activate
-python3 -m pip install -e . --no-deps --no-build-isolation
+python3 -m pip install -e '.[pypixelcolor]' --no-build-isolation
+python3 -c "import pypixelcolor; print(pypixelcolor.__file__)"
 ledpanel-manager
 ```
 
 Do not use `--break-system-packages` for this app; the venv approach keeps Debian's Python installation intact.
 
+If you already have `/home/benrenegar/.local/bin/pypixelcolor`, that confirms the command-line script is on your shell `PATH`, but it does not prove that the Python interpreter running this app can import the `pypixelcolor` module. The check above should print a path inside `.venv` (or another importable site-packages path). If it fails, reinstall with `python3 -m pip install -e '.[pypixelcolor]' --no-build-isolation` while the venv is activated; this installs `pypixelcolor` from the upstream GitHub repository configured in `pyproject.toml`.
+
 The default bundled-font path is `ledpanel_manager/fonts/VCR-OSD-Mono.ttf`. Add the VCR OSD Mono TTF there to make it appear in the font selector; the app also falls back to Pillow's default bitmap font.
 
-## Optional pypixelcolor support
+## pypixelcolor support
 
-If you want to experiment with the upstream `pypixelcolor` transport, install it inside the venv after the steps above:
+The app will use `pypixelcolor` when it is importable by the same Python interpreter that launches `ledpanel-manager`; otherwise it falls back to the built-in bleak sender. Prefer Option B above so `pypixelcolor` is installed into the app venv from the upstream GitHub repository configured in `pyproject.toml`.
+
+Useful diagnostics:
 
 ```bash
-python3 -m pip install pypixelcolor
+which pypixelcolor
+python3 -c "import sys; print(sys.executable); import pypixelcolor; print(pypixelcolor.__file__)"
 ```
 
-The app will use it when importable and will otherwise fall back to the built-in bleak sender.
+If `which pypixelcolor` succeeds but the Python import fails, the CLI script and the running Python environment do not match. Activate `.venv` and reinstall the app with `python3 -m pip install -e '.[pypixelcolor]' --no-build-isolation`.
 
 ## Notes
 
