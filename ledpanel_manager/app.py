@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio, threading, time
+import asyncio, logging, threading, time
 import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, GLib, Gdk, Gio
@@ -8,6 +8,9 @@ from PIL import Image
 from .models import FrameConfig, FrameType, PanelState, PANEL_WIDTH, PANEL_HEIGHT
 from .rendering import render_frame, FONT_ALIASES
 from .ipixel import IPixelClient, discover_panels
+
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 class PixelPreview(Gtk.DrawingArea):
     def __init__(self):
@@ -137,7 +140,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 asyncio.run(client.connect())
                 GLib.idle_add(self.set_status, f"Connected to {p.address}")
             except Exception as exc:
-                GLib.idle_add(self.set_status, f"Preview only: Bluetooth connection failed ({exc})")
+                logger.exception("Bluetooth connection failed")
+                GLib.idle_add(self.set_status, f"Preview only: Bluetooth connection failed; see terminal: {exc}")
                 client = None
         tick=0
         while p.running:
@@ -149,7 +153,8 @@ class MainWindow(Gtk.ApplicationWindow):
                     if client is not None:
                         try: asyncio.run(client.send_image(img))
                         except Exception as exc:
-                            GLib.idle_add(self.set_status, f"Bluetooth send failed: {exc}"); client = None
+                            logger.exception("Bluetooth send failed")
+                            GLib.idle_add(self.set_status, f"Bluetooth send failed; see terminal: {exc}"); client = None
                     tick+=1; time.sleep(.25)
         if client is not None:
             try: asyncio.run(client.disconnect())
