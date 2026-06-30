@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import binascii
+import importlib.util
 import io
 import logging
+import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Callable
@@ -96,7 +98,12 @@ class IPixelClient:
         try:
             from pypixelcolor import IPixelDevice  # type: ignore
         except ModuleNotFoundError:
-            logger.info("pypixelcolor is not installed; using built-in bleak transport")
+            logger.info(
+                "pypixelcolor is not importable by %s; using built-in bleak transport. "
+                "If it is installed elsewhere, run this app with that Python or install it into this environment.",
+                sys.executable,
+            )
+            logger.debug("pypixelcolor import spec: %r", importlib.util.find_spec("pypixelcolor"))
             IPixelDevice = None
         except Exception:
             logger.warning("Unable to import pypixelcolor; using built-in bleak transport", exc_info=True)

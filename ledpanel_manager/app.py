@@ -15,6 +15,38 @@ logging.getLogger("bleak").setLevel(logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+PANEL_PLACEHOLDER_ITEMS = ("Panel MAC Address", "Discovering panels...", "No panels found")
+
+
+class PanelConnection:
+    def __init__(self, address: str):
+        self.address = address
+        self.client = IPixelClient(address)
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._run_loop, name=f"panel-{address}", daemon=True)
+        self.thread.start()
+
+    def _run_loop(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def submit(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+    def connect(self):
+        return self.submit(self.client.connect())
+
+    def send_image(self, image):
+        return self.submit(self.client.send_image(image))
+
+    def disconnect(self):
+        fut = self.submit(self.client.disconnect())
+        try:
+            return fut.result(timeout=10)
+        finally:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+
+
 class PixelPreview(Gtk.DrawingArea):
     def __init__(self):
         super().__init__(); self.image = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT)); self.set_content_width(720); self.set_content_height(180); self.set_draw_func(self.draw)
@@ -76,7 +108,7 @@ class FrameDialog(Gtk.Dialog):
 
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="LED Matrix Manager"); self.set_default_size(900,650); self.panels=[PanelState("Panel 1")]; self.clients={}; self.discovered_count=0; self.discovered_addresses=[]; self.discovery_complete=False; self.status_label=Gtk.Label(label="Ready"); self.status_bar=Gtk.ActionBar(); self.status_bar.pack_start(self.status_label); self.tabs=Gtk.Notebook(); self.build(); self.start_discovery()
+        super().__init__(application=app, title="LED Matrix Manager"); self.set_default_size(900,650); self.panels=[PanelState("Panel 1")]; self.discovered_count=0; self.discovered_addresses=[]; self.discovery_complete=False; self.status_label=Gtk.Label(label="Ready"); self.status_bar=Gtk.ActionBar(); self.status_bar.pack_start(self.status_label); self.tabs=Gtk.Notebook(); self.build(); self.start_discovery()
     def build(self):
         root=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); root.set_margin_top(10); root.set_margin_start(10); root.set_margin_end(10); self.set_child(root); title=Gtk.Label(label="LED Matrix Manager"); title.add_css_class("title-1"); title.set_halign(Gtk.Align.START); root.append(title); self.tabs.set_vexpand(True); root.append(self.tabs); root.append(self.status_bar); self.refresh_tabs()
     def refresh_tabs(self):
@@ -85,7 +117,7 @@ class MainWindow(Gtk.ApplicationWindow):
         add=Gtk.Button(label="✚ Add Panel"); add.connect("clicked", lambda _: (self.panels.append(PanelState(f"Panel {len(self.panels)+1}")), self.refresh_tabs())); self.tabs.append_page(Gtk.Box(), add)
     def panel_page(self,p):
         box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); box.set_margin_top(20); box.set_margin_bottom(20); box.set_margin_start(20); box.set_margin_end(20); combo=Gtk.ComboBoxText(); p.combo=combo; self.populate_panel_combo(p)
-        conn=Gtk.Label(label="● Connected" if p.connected else "○ Disconnected"); start=Gtk.Button(label="▶ Start Display"); stop=Gtk.Button(label="■ Stop Display"); start.connect("clicked", lambda _: self.start_panel(p)); stop.connect("clicked", lambda _: self.stop_panel(p)); head=Gtk.Box(spacing=12); [head.append(w) for w in (Gtk.Label(label="Panel"),combo,conn,start,stop)]; box.append(head)
+        p.connection_status=Gtk.Label(label="● Connected" if p.connected else "○ Disconnected"); p.connect_button=Gtk.Button(label="Disconnect" if p.connected else "Connect"); p.connect_button.connect("clicked", lambda _: self.toggle_connection(p)); start=Gtk.Button(label="▶ Start Display"); stop=Gtk.Button(label="■ Stop Display"); start.connect("clicked", lambda _: self.start_panel(p)); stop.connect("clicked", lambda _: self.stop_panel(p)); head=Gtk.Box(spacing=12); [head.append(w) for w in (Gtk.Label(label="Panel"),combo,p.connect_button,p.connection_status,start,stop)]; box.append(head)
         p.preview=PixelPreview(); box.append(p.preview); p.frames_box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6); box.append(p.frames_box); self.refresh_frames(p); add=Gtk.Button(label="✚ Add Frame"); add.connect("clicked", lambda _: (p.frames.append(FrameConfig()), self.refresh_frames(p))); box.append(add); return box
     def refresh_frames(self,p):
         while (child:=p.frames_box.get_first_child()): p.frames_box.remove(child)
@@ -130,24 +162,71 @@ class MainWindow(Gtk.ApplicationWindow):
             if hasattr(p,"combo"): self.populate_panel_combo(p)
         if self.discovered_count == 0: self.set_status("No panels found")
     def set_status(self, message): self.status_label.set_text(message)
+
+    def selected_address(self, p):
+        active = p.combo.get_active_text() if hasattr(p, "combo") else p.address
+        if active and active not in PANEL_PLACEHOLDER_ITEMS:
+            p.address = active
+        return p.address
+    def toggle_connection(self, p):
+        if getattr(p, "connection", None):
+            self.disconnect_panel(p)
+        else:
+            self.connect_panel(p)
+    def connect_panel(self, p):
+        address = self.selected_address(p)
+        if not address:
+            self.set2026-06-30 14:56:38,895 INFO [ledpanel_manager.ipixel] pypixelcolor is not installed; using built-in bleak transport
+_status("Select a panel before connecting")
+            return
+        p.connect_button.set_sensitive(False)
+        p.connection_status.set_text("◌ Connecting...")
+        self.set_status(f"Connecting to {address}")
+        threading.Thread(target=self.connect_worker, args=(p, address), daemon=True).start()
+    def connect_worker(self, p, address):
+        connection = PanelConnection(address)
+        try:
+            connection.connect().result(timeout=30)
+        except Exception as exc:
+            logger.exception("Bluetooth connection failed")
+            try:
+                connection.disconnect()
+            except Exception:
+                logger.debug("Bluetooth cleanup failed", exc_info=True)
+            GLib.idle_add(self.connection_finished, p, None, f"Bluetooth connection failed; see terminal: {exc}")
+            return
+        GLib.idle_add(self.connection_finished, p, connection, f"Connected to {address}")
+    def connection_finished(self, p, connection, message):
+        p.connection = connection
+        p.connected = connection is not None
+        p.connect_button.set_label("Disconnect" if p.connected else "Connect")
+        p.connect_button.set_sensitive(True)
+        p.connection_status.set_text("● Connected" if p.connected else "○ Disconnected")
+        self.set_status(message)
+    def disconnect_panel(self, p):
+        connection = getattr(p, "connection", None)
+        if connection is None:
+            return
+        p.connect_button.set_sensitive(False)
+        p.connection_status.set_text("◌ Disconnecting...")
+        self.set_status(f"Disconnecting from {p.address}")
+        threading.Thread(target=self.disconnect_worker, args=(p, connection), daemon=True).start()
+    def disconnect_worker(self, p, connection):
+        try:
+            connection.disconnect()
+            message = f"Disconnected from {p.address}"
+        except Exception as exc:
+            logger.exception("Bluetooth disconnect failed")
+            message = f"Bluetooth disconnect failed; see terminal: {exc}"
+        GLib.idle_add(self.connection_finished, p, None, message)
     def start_panel(self,p):
         active = p.combo.get_active_text() if hasattr(p, "combo") else p.address
-        if active and active not in ("Panel MAC Address", "Discovering panels...", "No panels found"): p.address = active
-        p.running=True; self.set_status("Display running"); threading.Thread(target=self.run_loop,args=(p,),daemon=True).start()
+        if active and active not in PANEL_PLACEHOLDER_ITEMS: p.address = active
+        p.running=True; self.set_status("Display running" if getattr(p, "connection", None) else "Preview running (panel not connected)"); threading.Thread(target=self.run_loop,args=(p,),daemon=True).start()
     def stop_panel(self,p): p.running=False; self.set_status("Display stopped")
     def run_loop(self,p):
         asyncio.run(self.run_loop_async(p))
     async def run_loop_async(self,p):
-        client = None
-        if p.address:
-            try:
-                client = IPixelClient(p.address)
-                await client.connect()
-                GLib.idle_add(self.set_status, f"Connected to {p.address}")
-            except Exception as exc:
-                logger.exception("Bluetooth connection failed")
-                GLib.idle_add(self.set_status, f"Preview only: Bluetooth connection failed; see terminal: {exc}")
-                client = None
         tick=0
         while p.running:
             for fr in list(p.frames):
@@ -155,18 +234,14 @@ class MainWindow(Gtk.ApplicationWindow):
                 while p.running and time.monotonic()<end:
                     img=render_frame(fr,tick)
                     GLib.idle_add(p.preview.set_image,img)
-                    if client is not None:
+                    connection = getattr(p, "connection", None)
+                    if connection is not None:
                         try:
-                            await client.send_image(img)
+                            await asyncio.wrap_future(connection.send_image(img))
                         except Exception as exc:
                             logger.exception("Bluetooth send failed")
-                            GLib.idle_add(self.set_status, f"Bluetooth send failed; see terminal: {exc}"); client = None
+                            GLib.idle_add(self.set_status, f"Bluetooth send failed; see terminal: {exc}")
                     tick+=1; await asyncio.sleep(.25)
-        if client is not None:
-            try:
-                await client.disconnect()
-            except Exception:
-                logger.debug("Bluetooth disconnect failed", exc_info=True)
 
 def main():
     app=Gtk.Application(application_id="uk.org.ledpanel.manager", flags=Gio.ApplicationFlags.DEFAULT_FLAGS); app.connect("activate", lambda a: MainWindow(a).present()); return app.run()
