@@ -9,7 +9,7 @@ A Debian/Linux GTK client for iPixel Color BLE LED matrix panels, initially targ
 - Per-panel frame playlists with text, image, clock, and date frames.
 - Live 16x64 pixel preview while display output is running.
 - Pillow-based rendering for custom clock/date/images and text preview.
-- BLE sender abstraction that uses `pypixelcolor` when available and falls back to documented iPixel BLE UUID/raw-write structure.
+- BLE sender abstraction that uses `pypixelcolor` for panel updates, with the experimental bleak/raw-write transport available only when explicitly enabled for debugging.
 
 ## Run on Debian 13
 
@@ -44,7 +44,7 @@ The default bundled-font path is `ledpanel_manager/fonts/VCR-OSD-Mono.ttf`. Add 
 
 ## pypixelcolor support
 
-The app will use `pypixelpython3 -m venv --system-site-packages .venvcolor` when it is importable by the same Python interpreter that launches `ledpanel-manager`; otherwise it falls back to the built-in bleak sender. Prefer Option B above so `pypixelcolor` is installed into the app venv from the upstream GitHub repository.
+The app requires `pypixelcolor` for normal panel updates. The earlier built-in bleak sender is still present for debugging, but it is disabled by default because it can connect without reliably updating the panel. Prefer Option B above so `pypixelcolor` is installed into the app venv from the upstream GitHub repository.
 
 Useful diagnostics:
 
@@ -53,9 +53,11 @@ which pypixelcolor
 python3 -c "import sys; print(sys.executable); import pypixelcolor; print(pypixelcolor.__file__)"
 ```
 
-If `which pypixelcolor` succeeds but the Python import fails, the CLI script and the running Python environment do not match. Activate `.venv` and install the module with `python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'`.
+If `which pypixelcolor` succeeds but the Python import fails, the CLI script and the running Python environment do not match. Activate `.venv` and install the module with `python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'`. The app imports `pypixelcolor.AsyncClient`, which is what the current package exports.
 
 If pip reports `BackendUnavailable: Cannot import 'hatchling.build'`, it means `pypixelcolor` needs the Hatchling build backend. Do not install `pypixelcolor` with `--no-build-isolation`; run the separate `python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'` command above so pip can create an isolated build environment and install Hatchling for that package automatically.
+
+To temporarily re-enable the experimental bleak sender for protocol debugging, launch the app with `LEDPANEL_ALLOW_BLEAK_FALLBACK=1 ledpanel-manager`.
 
 ## Notes
 

@@ -5,6 +5,7 @@ import binascii
 import importlib.util
 import io
 import logging
+import os
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -96,29 +97,45 @@ class IPixelClient:
 
     async def connect(self) -> None:
         try:
-            from pypixelcolor import IPixelDevice  # type: ignore
-        except ModuleNotFoundError:
-            logger.info(
-                "pypixelcolor is not importable by %s; using built-in bleak transport. "
-                "If it is installed elsewhere, run this app with that Python or install it into this environment.",
+            from pypixelcolor import AsyncClient  # type: ignore
+        except ModuleNotFoundError as exc:
+            logger.error(
+                "pypixelcolor is not importable by %s. Install it into this environment; "
+                "the bleak fallback is disabled by default because it does not reliably update this panel.",
                 sys.executable,
             )
             logger.debug("pypixelcolor import spec: %r", importlib.util.find_spec("pypixelcolor"))
-            IPixelDevice = None
+            if not self._allow_bleak_fallback():
+                raise RuntimeError("pypixelcolor is required for panel updates but is not installed in this Python environment") from exc
+            await self._connect_bleak()
+            return
+        except ImportError as exc:
+            logger.error(
+                "Installed pypixelcolor package does not expose the expected AsyncClient API; "
+                "using bleak only if LEDPANEL_ALLOW_BLEAK_FALLBACK=1",
+                exc_info=True,
+            )
+            if not self._allow_bleak_fallback():
+                raise RuntimeError("Installed pypixelcolor package is incompatible; expected pypixelcolor.AsyncClient") from exc
+            await self._connect_bleak()
+            return
+        try:
+            self._pypixel = AsyncClient(self.address)
+            await self._pypixel.connect()
+            logger.info("Connected to %s using pypixelcolor AsyncClient", self.address)
+            return
         except Exception:
-            logger.warning("Unable to import pypixelcolor; using built-in bleak transport", exc_info=True)
-            IPixelDevice = None
-        if IPixelDevice is not None:
-            try:
-                self._pypixel = IPixelDevice(self.address)
-                maybe = self._pypixel.connect()
-                if asyncio.iscoroutine(maybe):
-                    await maybe
-                logger.info("Connected to %s using pypixelcolor", self.address)
-                return
-            except Exception:
-                logger.warning("pypixelcolor connection failed; falling back to bleak", exc_info=True)
-                self._pypixel = None
+            logger.exception("pypixelcolor connection failed")
+            self._pypixel = None
+            if not self._allow_bleak_fallback():
+                raise
+            logger.warning("Falling back to bleak because LEDPANEL_ALLOW_BLEAK_FALLBACK=1")
+            await self._connect_bleak()
+
+    def _allow_bleak_fallback(self) -> bool:
+        return os.environ.get("LEDPANEL_ALLOW_BLEAK_FALLBACK") == "1"
+
+    async def _connect_bleak(self) -> None:
         from bleak import BleakClient
         self._client = BleakClient(self.address)
         await self._client.connect()
@@ -146,22 +163,11 @@ class IPixelClient:
 
     async def send_image(self, image: Image.Image) -> None:
         if self._pypixel is not None:
-            for name in ("send_png", "send_image", "draw_image", "set_image"):
-                method = getattr(self._pypixel, name, None)
-                if method:
-                    logger.debug("Sending image using pypixelcolor.%s", name)
-                    if name == "send_png":
-                        with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
-                            image.convert("RGBA").save(tmp.name, format="PNG", compress_level=6)
-                            maybe = method(tmp.name)
-                            if asyncio.iscoroutine(maybe):
-                                await maybe
-                    else:
-                        maybe = method(image)
-                        if asyncio.iscoroutine(maybe):
-                            await maybe
-                    return
-            raise RuntimeError("pypixelcolor device has no supported image sending method")
+            with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+                image.convert("RGBA").save(tmp.name, format="PNG", compress_level=6)
+                logger.debug("Sending image using pypixelcolor.AsyncClient.send_image")
+                await self._pypixel.send_image(tmp.name, resize_method="fit")
+            return
         command = image_to_png_command(image)
         await self._write_command(command)
         await self._write_command(select_screen_command(LIVE_SCREEN_BUFFER), wait_for_ack=False)
