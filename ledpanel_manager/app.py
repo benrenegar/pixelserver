@@ -250,13 +250,17 @@ class MainWindow(Gtk.ApplicationWindow):
     def run_loop(self,p): asyncio.run(self.run_loop_async(p))
     async def run_loop_async(self,p):
         tick=0
+        last_panel_send = 0.0
         while p.running:
             for fr in list(p.frames):
                 end=time.monotonic()+fr.duration
                 while p.running and time.monotonic()<end:
                     img=render_frame(fr,tick); GLib.idle_add(p.preview.set_image,img); connection=getattr(p,"connection",None)
-                    if connection is not None:
-                        try: await asyncio.wrap_future(connection.send_image(img))
+                    now = time.monotonic()
+                    if connection is not None and now - last_panel_send >= 1.0:
+                        try:
+                            await asyncio.wrap_future(connection.send_image(img))
+                            last_panel_send = now
                         except Exception as exc: logger.exception("Bluetooth send failed"); GLib.idle_add(self.set_status, f"Bluetooth send failed; see terminal: {exc}")
                     tick+=1; await asyncio.sleep(.25)
     def clear_display(self,p):
