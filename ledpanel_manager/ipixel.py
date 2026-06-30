@@ -11,6 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Callable
 from PIL import Image
+from .models import PANEL_WIDTH, PANEL_HEIGHT
 
 WRITE_UUID = "0000fa02-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000fa03-0000-1000-8000-00805f9b34fb"
@@ -86,7 +87,7 @@ class _AckManager:
 
 
 class IPixelClient:
-    """Small adapter around pypixelcolor/bleak for 16x64 bitmap updates."""
+    """Small adapter around pypixelcolor/bleak for 16x96 bitmap updates."""
 
     def __init__(self, address: str):
         self.address = address
@@ -171,6 +172,26 @@ class IPixelClient:
         command = image_to_png_command(image)
         await self._write_command(command)
         await self._write_command(select_screen_command(LIVE_SCREEN_BUFFER), wait_for_ack=False)
+
+
+    async def clear_display(self) -> None:
+        await self.send_image(Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0)))
+
+    async def set_brightness(self, value: int) -> None:
+        value = max(0, min(100, int(value)))
+        if self._pypixel is not None:
+            for name in ("set_brightness", "brightness"):
+                method = getattr(self._pypixel, name, None)
+                if method is not None:
+                    maybe = method(value)
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+                    logger.info("Set brightness to %d using pypixelcolor.%s", value, name)
+                    return
+            logger.warning("Connected pypixelcolor client has no brightness method; ignoring brightness=%d", value)
+            return
+        # Best-effort raw command retained for the experimental bleak backend.
+        await self._write_command(bytes([0x05, 0x00, 0x0A, 0x01, value & 0xFF]), wait_for_ack=False)
 
     async def _write_command(self, data: bytes, *, wait_for_ack: bool = True) -> None:
         if self._client is None:

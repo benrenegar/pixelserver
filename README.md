@@ -1,13 +1,13 @@
 # LED Matrix Manager
 
-A Debian/Linux GTK client for iPixel Color BLE LED matrix panels, initially targeting 16x64 panels.
+A Debian/Linux GTK client for iPixel Color BLE LED matrix panels, initially targeting 16x96 panels.
 
 ## Features
 
 - GTK 4 tabbed UI for one or more panels.
 - Background BLE discovery for nearby `LED_BLE_*`/iPixel devices.
 - Per-panel frame playlists with text, image, clock, and date frames.
-- Live 16x64 pixel preview while display output is running.
+- Live 16x96 pixel preview while display output is running.
 - Pillow-based rendering for custom clock/date/images and text preview.
 - BLE sender abstraction that uses `pypixelcolor` for panel updates, with the experimental bleak/raw-write transport available only when explicitly enabled for debugging.
 
