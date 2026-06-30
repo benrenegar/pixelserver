@@ -12,7 +12,7 @@ from .models import FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
 PACKAGE_DIR = Path(__file__).parent
 FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
 DIGIT_DIRS = [PACKAGE_DIR / "digits", PACKAGE_DIR.parent / "digits"]
-CLOCK_CHARACTER_SPACING = 1
+CLOCK_CHARACTER_SPACING = 2
 
 
 def discover_fonts() -> dict[str, Path]:
