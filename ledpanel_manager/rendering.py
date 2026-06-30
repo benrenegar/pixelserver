@@ -12,7 +12,7 @@ from .models import FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
 PACKAGE_DIR = Path(__file__).parent
 FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
 DIGIT_DIRS = [PACKAGE_DIR / "digits", PACKAGE_DIR.parent / "digits"]
-CLOCK_CHARACTER_SPACING = 3
+CLOCK_CHARACTER_SPACING = 1
 
 
 def discover_fonts() -> dict[str, Path]:
@@ -212,7 +212,7 @@ def _render_bitmap_clock(settings: dict, tick: int = 0) -> Image.Image | None:
     if settings.get("time_mode") == "12-hour":
         suffix = "am.png" if hour < 12 else "pm.png"
         hour = hour % 12 or 12
-    parts = list(f"{hour:02d}:{now.tm_min:02d}")
+    parts = list(f"{hour}:{now.tm_min:02d}")
     if settings.get("show_seconds"):
         parts.extend(list(f":{now.tm_sec:02d}"))
     bitmaps: list[Image.Image] = []
@@ -250,7 +250,7 @@ def render_clock(settings: dict, tick: int = 0) -> Image.Image:
     fg = tuple(settings.get("foreground", (255, 255, 0)))
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
     icon_x = _paste_icon(img, _load_icon(settings.get("icon_path")))
-    fmt = "%I:%M" if settings.get("time_mode") == "12-hour" else "%H:%M"
+    fmt = "%l:%M" if settings.get("time_mode") == "12-hour" else "%H:%M"
     if settings.get("show_seconds"):
         fmt += ":%S"
     text = time.strftime(fmt)
