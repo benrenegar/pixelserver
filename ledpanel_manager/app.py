@@ -133,11 +133,13 @@ class MainWindow(Gtk.ApplicationWindow):
         p.running=True; self.set_status("Display running"); threading.Thread(target=self.run_loop,args=(p,),daemon=True).start()
     def stop_panel(self,p): p.running=False; self.set_status("Display stopped")
     def run_loop(self,p):
+        asyncio.run(self.run_loop_async(p))
+    async def run_loop_async(self,p):
         client = None
         if p.address:
             try:
                 client = IPixelClient(p.address)
-                asyncio.run(client.connect())
+                await client.connect()
                 GLib.idle_add(self.set_status, f"Connected to {p.address}")
             except Exception as exc:
                 logger.exception("Bluetooth connection failed")
@@ -146,19 +148,22 @@ class MainWindow(Gtk.ApplicationWindow):
         tick=0
         while p.running:
             for fr in list(p.frames):
-                end=time.time()+fr.duration
-                while p.running and time.time()<end:
+                end=time.monotonic()+fr.duration
+                while p.running and time.monotonic()<end:
                     img=render_frame(fr,tick)
                     GLib.idle_add(p.preview.set_image,img)
                     if client is not None:
-                        try: asyncio.run(client.send_image(img))
+                        try:
+                            await client.send_image(img)
                         except Exception as exc:
                             logger.exception("Bluetooth send failed")
                             GLib.idle_add(self.set_status, f"Bluetooth send failed; see terminal: {exc}"); client = None
-                    tick+=1; time.sleep(.25)
+                    tick+=1; await asyncio.sleep(.25)
         if client is not None:
-            try: asyncio.run(client.disconnect())
-            except Exception: pass
+            try:
+                await client.disconnect()
+            except Exception:
+                logger.debug("Bluetooth disconnect failed", exc_info=True)
 
 def main():
     app=Gtk.Application(application_id="uk.org.ledpanel.manager", flags=Gio.ApplicationFlags.DEFAULT_FLAGS); app.connect("activate", lambda a: MainWindow(a).present()); return app.run()
