@@ -6,9 +6,20 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .models import PANEL_HEIGHT, PANEL_WIDTH, FrameConfig, FrameType
 
 FONT_DIR = Path(__file__).with_name("fonts")
-FONT_ALIASES = {"Phatone": FONT_DIR / "phatone.ttf", 
+FONT_ALIASES = {"Athene": FONT_DIR / "athene.ttf", 
+"Chicago": FONT_DIR / "chicago.ttf",
+"Epsy Sans": FONT_DIR / "epsy.ttf",
+"Hellovetica": FONT_DIR / "hellovetica.ttf",
+"Liverpool": FONT_DIR / "liverpool.ttf",
+"Los Altos": FONT_DIR / "losaltos.ttf",
 "Loxica": FONT_DIR / "v5loxicar.ttf",
-"Square Dance": FONT_DIR / "squaredance00.ttf"}
+"Monaco": FONT_DIR / "monaco.ttf",
+"Parc Place": FONT_DIR / "parcplace.ttf",
+"Phatone": FONT_DIR / "phatone.ttf",
+"Pragmata": FONT_DIR / "pragmata.ttf",
+"San Francisco": FONT_DIR / "sanfrisco.ttf",
+"Torrance": FONT_DIR / "torrance.ttf",
+"Valencia": FONT_DIR / "valencia.ttf"}
 DIGITS = {
     "0": ["111","101","101","101","111"], "1": ["010","110","010","010","111"],
     "2": ["111","001","111","100","111"], "3": ["111","001","111","001","111"],
