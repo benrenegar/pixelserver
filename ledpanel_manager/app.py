@@ -250,15 +250,49 @@ class MainWindow(Gtk.ApplicationWindow):
     def run_loop(self,p): asyncio.run(self.run_loop_async(p))
     async def run_loop_async(self,p):
         tick=0
+        last_panel_send = 0.0
         while p.running:
             for fr in list(p.frames):
                 end=time.monotonic()+fr.duration
                 while p.running and time.monotonic()<end:
                     img=render_frame(fr,tick); GLib.idle_add(p.preview.set_image,img); connection=getattr(p,"connection",None)
-                    if connection is not None:
-                        try: await asyncio.wrap_future(connection.send_image(img))
-                        except Exception as exc: logger.exception("Bluetooth send failed"); GLib.idle_add(self.set_status, f"Bluetooth send failed; see terminal: {exc}")
+                    now = time.monotonic()
+                    if connection is not None and now - last_panel_send >= 1.0:
+                        try:
+                            await asyncio.wrap_future(connection.send_image(img))
+                            last_panel_send = now
+                        except Exception as exc:
+                            logger.exception("Bluetooth send failed")
+                            GLib.idle_add(self.set_status, f"Bluetooth send failed; reconnecting: {exc}")
+                            last_panel_send = now
+                            await asyncio.to_thread(self.reconnect_panel_after_send_failure, p, connection)
                     tick+=1; await asyncio.sleep(.25)
+
+    def reconnect_panel_after_send_failure(self, p, old_connection):
+        GLib.idle_add(self.set_status, f"Connection lost; reconnecting to {p.address}")
+        try:
+            old_connection.disconnect()
+        except Exception:
+            logger.debug("Bluetooth disconnect during reconnect failed", exc_info=True)
+        p.connection = None
+        p.connected = False
+        GLib.idle_add(self.connection_finished, p, None, f"Disconnected from {p.address}; reconnecting")
+        if not p.address:
+            return
+        new_connection = PanelConnection(p.address)
+        try:
+            new_connection.connect().result(timeout=30)
+        except Exception as exc:
+            logger.exception("Bluetooth reconnect failed")
+            try:
+                new_connection.disconnect()
+            except Exception:
+                logger.debug("Bluetooth reconnect cleanup failed", exc_info=True)
+            GLib.idle_add(self.connection_finished, p, None, f"Bluetooth reconnect failed; see terminal: {exc}")
+            return
+        p.connection = new_connection
+        p.connected = True
+        GLib.idle_add(self.connection_finished, p, new_connection, f"Reconnected to {p.address}")
     def clear_display(self,p):
         black=Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0,0,0)); p.preview.set_image(black); connection=getattr(p,"connection",None)
         if connection: threading.Thread(target=lambda: connection.clear().result(timeout=15), daemon=True).start()
