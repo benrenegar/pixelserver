@@ -44,7 +44,7 @@ The default bundled-font path is `ledpanel_manager/fonts/VCR-OSD-Mono.ttf`. Add 
 
 ## pypixelcolor support
 
-The app will use `pypixelcolor` when it is importable by the same Python interpreter that launches `ledpanel-manager`; otherwise it falls back to the built-in bleak sender. Prefer Option B above so `pypixelcolor` is installed into the app venv from the upstream GitHub repository.
+The app will use `pypixelpython3 -m venv --system-site-packages .venvcolor` when it is importable by the same Python interpreter that launches `ledpanel-manager`; otherwise it falls back to the built-in bleak sender. Prefer Option B above so `pypixelcolor` is installed into the app venv from the upstream GitHub repository.
 
 Useful diagnostics:
 
