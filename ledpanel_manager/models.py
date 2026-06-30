@@ -30,6 +30,8 @@ class FrameConfig:
             "background": (0, 0, 0),
             "font": "VCR OSD Mono",
             "font_size": 16,
+            "horizontal_spacing": 0,
+            "vertical_spacing": 0,
         }
         if self.frame_type is FrameType.TEXT:
             return base | {"message": "Hello", "scrolling": "None", "scroll_speed": 4}

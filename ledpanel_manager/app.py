@@ -43,7 +43,7 @@ class FrameDialog(Gtk.Dialog):
         if ft is FrameType.TEXT or ft is FrameType.DATE:
             if ft is FrameType.DATE:
                 e=Gtk.Entry(text=self.settings.get("date_format","%d/%m/%Y")); self.widgets["date_format"]=e; self.row(box,"Date format",e)
-            self.row(box,"Font", self.combo("font", list(FONT_ALIASES) or ["Default"])); sp=Gtk.SpinButton.new_with_range(7,48,1); sp.set_value(self.settings.get("font_size",16)); self.widgets["font_size"]=sp; self.row(box,"Size",sp)
+            self.row(box,"Font", self.combo("font", list(FONT_ALIASES) or ["Default"])); sp=Gtk.SpinButton.new_with_range(7,48,1); sp.set_value(self.settings.get("font_size",16)); self.widgets["font_size"]=sp; self.row(box,"Size",sp); hs=Gtk.SpinButton.new_with_range(-5,20,1); hs.set_value(self.settings.get("horizontal_spacing",0)); self.widgets["horizontal_spacing"]=hs; self.row(box,"Horizontal spacing",hs); vs=Gtk.SpinButton.new_with_range(-5,20,1); vs.set_value(self.settings.get("vertical_spacing",0)); self.widgets["vertical_spacing"]=vs; self.row(box,"Vertical spacing",vs)
         if ft is FrameType.TEXT:
             self.row(box,"Scrolling", self.combo("scrolling", ["None","Right to left","Left to right","Top to bottom","Bottom to top"])); sc=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,1,20,1); sc.set_value(self.settings.get("scroll_speed",4)); self.widgets["scroll_speed"]=sc; self.row(box,"Scroll speed",sc)
         if ft is FrameType.IMAGE:
@@ -70,49 +70,74 @@ class FrameDialog(Gtk.Dialog):
 
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="LED Matrix Manager"); self.set_default_size(900,650); self.panels=[PanelState("Panel 1")]; self.clients={}; self.status=Gtk.Label(label="Ready"); self.tabs=Gtk.Notebook(); self.build(); self.start_discovery()
+        super().__init__(application=app, title="LED Matrix Manager"); self.set_default_size(900,650); self.panels=[PanelState("Panel 1")]; self.clients={}; self.discovered_count=0; self.discovered_addresses=[]; self.discovery_complete=False; self.status_label=Gtk.Label(label="Ready"); self.status_bar=Gtk.ActionBar(); self.status_bar.pack_start(self.status_label); self.tabs=Gtk.Notebook(); self.build(); self.start_discovery()
     def build(self):
-        root=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); root.set_margin_top(10); root.set_margin_start(10); root.set_margin_end(10); self.set_child(root); title=Gtk.Label(label="LED Matrix Manager"); title.add_css_class("title-1"); title.set_halign(Gtk.Align.START); root.append(title); root.append(self.tabs); root.append(self.status); self.refresh_tabs()
+        root=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); root.set_margin_top(10); root.set_margin_start(10); root.set_margin_end(10); self.set_child(root); title=Gtk.Label(label="LED Matrix Manager"); title.add_css_class("title-1"); title.set_halign(Gtk.Align.START); root.append(title); self.tabs.set_vexpand(True); root.append(self.tabs); root.append(self.status_bar); self.refresh_tabs()
     def refresh_tabs(self):
         while self.tabs.get_n_pages(): self.tabs.remove_page(0)
         for p in self.panels: self.tabs.append_page(self.panel_page(p), Gtk.Label(label=p.name))
         add=Gtk.Button(label="✚ Add Panel"); add.connect("clicked", lambda _: (self.panels.append(PanelState(f"Panel {len(self.panels)+1}")), self.refresh_tabs())); self.tabs.append_page(Gtk.Box(), add)
     def panel_page(self,p):
-        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); combo=Gtk.ComboBoxText(); combo.append_text(p.address or "Panel MAC Address"); combo.set_active(0); p.combo=combo
+        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); box.set_margin_top(20); box.set_margin_bottom(20); box.set_margin_start(20); box.set_margin_end(20); combo=Gtk.ComboBoxText(); p.combo=combo; self.populate_panel_combo(p)
         conn=Gtk.Label(label="● Connected" if p.connected else "○ Disconnected"); start=Gtk.Button(label="▶ Start Display"); stop=Gtk.Button(label="■ Stop Display"); start.connect("clicked", lambda _: self.start_panel(p)); stop.connect("clicked", lambda _: self.stop_panel(p)); head=Gtk.Box(spacing=12); [head.append(w) for w in (Gtk.Label(label="Panel"),combo,conn,start,stop)]; box.append(head)
         p.preview=PixelPreview(); box.append(p.preview); p.frames_box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6); box.append(p.frames_box); self.refresh_frames(p); add=Gtk.Button(label="✚ Add Frame"); add.connect("clicked", lambda _: (p.frames.append(FrameConfig()), self.refresh_frames(p))); box.append(add); return box
     def refresh_frames(self,p):
         while (child:=p.frames_box.get_first_child()): p.frames_box.remove(child)
         for i,f in enumerate(p.frames):
-            row=Gtk.Box(spacing=8); typec=Gtk.ComboBoxText(); [typec.append_text(t.value) for t in FrameType]; typec.set_active(list(FrameType).index(f.frame_type)); typec.connect("changed", lambda c,fr=f: (setattr(fr,"frame_type", FrameType(c.get_active_text())), setattr(fr,"settings",{})))
+            row=Gtk.Box(spacing=8); row.set_margin_top(10); row.set_margin_bottom(10); row.set_margin_start(10); row.set_margin_end(10); typec=Gtk.ComboBoxText(); [typec.append_text(t.value) for t in FrameType]; typec.set_active(list(FrameType).index(f.frame_type)); typec.connect("changed", lambda c,fr=f: (setattr(fr,"frame_type", FrameType(c.get_active_text())), setattr(fr,"settings",{})))
             dur=Gtk.SpinButton.new_with_range(1,3600,1); dur.set_value(f.duration); dur.connect("value-changed", lambda s,fr=f: setattr(fr,"duration",s.get_value()))
             settings=Gtk.Button(label="🔧 Settings"); settings.connect("clicked", lambda _,fr=f: self.open_settings(fr))
             up=Gtk.Button(label="▲"); down=Gtk.Button(label="▼"); rem=Gtk.Button(label="✖"); up.connect("clicked", lambda _,idx=i: self.move(p,idx,-1)); down.connect("clicked", lambda _,idx=i: self.move(p,idx,1)); rem.connect("clicked", lambda _,fr=f: (p.frames.remove(fr), self.refresh_frames(p)))
-            [row.append(w) for w in (Gtk.Label(label=f"Frame {i+1}"), Gtk.Label(label="Type"), typec, Gtk.Label(label="Duration (secs)"), dur, settings, up, down, rem)]; p.frames_box.append(row)
+            [row.append(w) for w in (Gtk.Label(label="Type"), typec, Gtk.Label(label="Duration (secs)"), dur, settings, up, down, rem)]
+            group=Gtk.Frame(label=f"Frame {i+1}"); group.set_child(row); p.frames_box.append(group)
     def move(self,p,i,d):
         j=i+d
         if 0<=j<len(p.frames): p.frames[i],p.frames[j]=p.frames[j],p.frames[i]; self.refresh_frames(p)
     def open_settings(self,fr):
         dlg=FrameDialog(self,fr); dlg.connect("response", lambda d,r: (d.apply() if r==Gtk.ResponseType.OK else None, d.destroy())); dlg.show()
-    def start_discovery(self): threading.Thread(target=lambda: asyncio.run(discover_panels(lambda d: GLib.idle_add(self.add_discovered,d), 4.0)), daemon=True).start()
+    def populate_panel_combo(self, p):
+        p.combo.remove_all()
+        if not self.discovery_complete:
+            p.combo.append_text("Discovering panels..."); p.combo.set_active(0); p.combo.set_sensitive(False); return
+        if not self.discovered_addresses:
+            p.combo.append_text("No panels found"); p.combo.set_active(0); p.combo.set_sensitive(False); return
+        for address in self.discovered_addresses: p.combo.append_text(address)
+        p.combo.set_active(0); p.combo.set_sensitive(True)
+    def start_discovery(self): threading.Thread(target=self.discovery_worker, daemon=True).start()
+    def discovery_worker(self):
+        asyncio.run(discover_panels(lambda d: GLib.idle_add(self.add_discovered,d), 4.0))
+        GLib.idle_add(self.discovery_finished)
     def add_discovered(self,d):
+        if d.address in self.discovered_addresses:
+            return
+        self.discovered_addresses.append(d.address)
+        self.discovered_count = len(self.discovered_addresses)
         for p in self.panels:
-            if hasattr(p,"combo"): p.combo.append_text(d.address)
-        self.status.set_text(f"Discovered {d.name} at {d.address}")
+            if hasattr(p,"combo"):
+                if self.discovered_count == 1: p.combo.remove_all()
+                p.combo.append_text(d.address)
+                if p.combo.get_active() < 0: p.combo.set_active(0)
+        self.set_status(f"Discovered {d.name} at {d.address}")
+    def discovery_finished(self):
+        self.discovery_complete = True
+        for p in self.panels:
+            if hasattr(p,"combo"): self.populate_panel_combo(p)
+        if self.discovered_count == 0: self.set_status("No panels found")
+    def set_status(self, message): self.status_label.set_text(message)
     def start_panel(self,p):
         active = p.combo.get_active_text() if hasattr(p, "combo") else p.address
-        if active and active != "Panel MAC Address": p.address = active
-        p.running=True; self.status.set_text("Display running"); threading.Thread(target=self.run_loop,args=(p,),daemon=True).start()
-    def stop_panel(self,p): p.running=False; self.status.set_text("Display stopped")
+        if active and active not in ("Panel MAC Address", "Discovering panels...", "No panels found"): p.address = active
+        p.running=True; self.set_status("Display running"); threading.Thread(target=self.run_loop,args=(p,),daemon=True).start()
+    def stop_panel(self,p): p.running=False; self.set_status("Display stopped")
     def run_loop(self,p):
         client = None
         if p.address:
             try:
                 client = IPixelClient(p.address)
                 asyncio.run(client.connect())
-                GLib.idle_add(self.status.set_text, f"Connected to {p.address}")
+                GLib.idle_add(self.set_status, f"Connected to {p.address}")
             except Exception as exc:
-                GLib.idle_add(self.status.set_text, f"Preview only: Bluetooth connection failed ({exc})")
+                GLib.idle_add(self.set_status, f"Preview only: Bluetooth connection failed ({exc})")
                 client = None
         tick=0
         while p.running:
@@ -124,7 +149,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     if client is not None:
                         try: asyncio.run(client.send_image(img))
                         except Exception as exc:
-                            GLib.idle_add(self.status.set_text, f"Bluetooth send failed: {exc}"); client = None
+                            GLib.idle_add(self.set_status, f"Bluetooth send failed: {exc}"); client = None
                     tick+=1; time.sleep(.25)
         if client is not None:
             try: asyncio.run(client.disconnect())

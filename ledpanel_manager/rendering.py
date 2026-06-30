@@ -6,27 +6,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .models import PANEL_HEIGHT, PANEL_WIDTH, FrameConfig, FrameType
 
 FONT_DIR = Path(__file__).with_name("fonts")
-FONT_ALIASES = {"Athene": FONT_DIR / "athene.ttf", 
-"Chicago": FONT_DIR / "chicago.ttf",
-"Epsy Sans": FONT_DIR / "epsy.ttf",
-"Hellovetica": FONT_DIR / "hellovetica.ttf",
-"Liverpool": FONT_DIR / "liverpool.ttf",
-"Los Altos": FONT_DIR / "losaltos.ttf",
-"Loxica": FONT_DIR / "v5loxicar.ttf",
-"Monaco": FONT_DIR / "monaco.ttf",
-"Parc Place": FONT_DIR / "parcplace.ttf",
-"Phatone": FONT_DIR / "phatone.ttf",
-"Pragmata": FONT_DIR / "pragmata.ttf",
-"San Francisco": FONT_DIR / "sanfrisco.ttf",
-"Torrance": FONT_DIR / "torrance.ttf",
-"Valencia": FONT_DIR / "valencia.ttf"}
-DIGITS = {
-    "0": ["111","101","101","101","111"], "1": ["010","110","010","010","111"],
-    "2": ["111","001","111","100","111"], "3": ["111","001","111","001","111"],
-    "4": ["101","101","111","001","001"], "5": ["111","100","111","001","111"],
-    "6": ["111","100","111","101","111"], "7": ["111","001","001","001","001"],
-    "8": ["111","101","111","101","111"], "9": ["111","101","111","001","111"],
-    ":": ["0","1","0","1","0"], "/": ["001","001","010","100","100"], "-": ["000","000","111","000","000"], " ": ["0","0","0","0","0"],
+FONT_ALIASES = {"VCR OSD Mono": FONT_DIR / "VCR-OSD-Mono.ttf"}
+SEGMENTS = {
+    "0": "abcedf", "1": "cf", "2": "acdeg", "3": "acdfg", "4": "bcfg",
+    "5": "abdfg", "6": "abdefg", "7": "acf", "8": "abcdefg", "9": "abcdfg",
 }
 
 
@@ -59,20 +42,52 @@ def fit_image(path: str | Path | None, mode: str) -> Image.Image:
     return quantize_panel(canvas)
 
 
+def _draw_text_no_antialias(mask: Image.Image, xy: tuple[int, int], text: str, font: ImageFont.ImageFont, h_spacing: int, v_spacing: int) -> None:
+    draw = ImageDraw.Draw(mask)
+    x0, y = xy
+    line_height = max(1, font.getbbox("Mg")[3] - font.getbbox("Mg")[1]) + v_spacing
+    for line in text.splitlines() or [""]:
+        x = x0
+        for ch in line:
+            draw.text((x, y), ch, fill=255, font=font)
+            bbox = draw.textbbox((0, 0), ch, font=font)
+            x += max(1, bbox[2] - bbox[0]) + h_spacing
+        y += line_height
+
+
+def _text_bbox(text: str, font: ImageFont.ImageFont, h_spacing: int, v_spacing: int) -> tuple[int, int]:
+    probe = Image.new("L", (1, 1)); draw = ImageDraw.Draw(probe)
+    widths = []
+    for line in text.splitlines() or [""]:
+        width = 0
+        for ch in line:
+            bbox = draw.textbbox((0, 0), ch, font=font)
+            width += max(1, bbox[2] - bbox[0]) + h_spacing
+        widths.append(max(0, width - h_spacing))
+    bbox = font.getbbox("Mg")
+    line_height = max(1, bbox[3] - bbox[1]) + v_spacing
+    return max(widths or [0]), max(1, line_height * max(1, len(widths)) - v_spacing)
+
+
 def render_text(settings: dict, offset: int = 0) -> Image.Image:
     fg, bg = settings["foreground"], settings["background"]
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
-    draw = ImageDraw.Draw(img)
     font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 16)))
     text = settings.get("message", "")
-    bbox = draw.textbbox((0, 0), text, font=font)
-    x, y = 0, (PANEL_HEIGHT - (bbox[3] - bbox[1])) // 2 - bbox[1]
+    h_spacing = int(settings.get("horizontal_spacing", 0))
+    v_spacing = int(settings.get("vertical_spacing", 0))
+    tw, th = _text_bbox(text, font, h_spacing, v_spacing)
+    x, y = 0, (PANEL_HEIGHT - th) // 2
     scrolling = settings.get("scrolling", "None")
     if scrolling == "Right to left": x = PANEL_WIDTH - offset
-    elif scrolling == "Left to right": x = offset - (bbox[2] - bbox[0])
-    elif scrolling == "Top to bottom": y = offset - (bbox[3] - bbox[1])
+    elif scrolling == "Left to right": x = offset - tw
+    elif scrolling == "Top to bottom": y = offset - th
     elif scrolling == "Bottom to top": y = PANEL_HEIGHT - offset
-    draw.text((x, y), text, fill=fg, font=font)
+    mask = Image.new("L", (PANEL_WIDTH, PANEL_HEIGHT), 0)
+    _draw_text_no_antialias(mask, (x, y), text, font, h_spacing, v_spacing)
+    mask = mask.point(lambda p: 255 if p >= 128 else 0)
+    fg_img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), fg)
+    img.paste(fg_img, mask=mask)
     return quantize_panel(img)
 
 
@@ -82,22 +97,40 @@ def render_clock(settings: dict, now: datetime | None = None) -> Image.Image:
     if settings.get("time_mode") == "12-hour": fmt = "%I:%M:%S" if settings.get("show_seconds") else "%I:%M"
     text = now.strftime(fmt).lstrip("0") or "0"
     if settings.get("flash_separator") and now.second % 2: text = text.replace(":", " ")
-    return render_dot_text(text, settings["foreground"], settings["background"])
+    return render_seven_segment_text(text, settings["foreground"], settings["background"])
 
 
-def render_dot_text(text: str, fg, bg) -> Image.Image:
-    scale, gap = 2, 1
-    widths = [(len(DIGITS.get(ch, DIGITS[' '])[0]) * scale) for ch in text]
-    total_w = sum(widths) + gap * (len(text) - 1)
-    x = max(0, (PANEL_WIDTH - total_w) // 2); y = 2
-    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg); draw = ImageDraw.Draw(img)
-    for ch, w in zip(text, widths):
-        pat = DIGITS.get(ch, DIGITS[" "])
-        for row, line in enumerate(pat):
-            for col, val in enumerate(line):
-                if val == "1": draw.rectangle((x+col*scale, y+row*scale, x+col*scale+1, y+row*scale+1), fill=fg)
-        x += w + gap
+def render_seven_segment_text(text: str, fg, bg) -> Image.Image:
+    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
+    draw = ImageDraw.Draw(img)
+    digit_w, colon_w, gap = 8, 3, 1
+    widths = [colon_w if ch == ":" else digit_w for ch in text]
+    total_w = sum(widths) + gap * max(0, len(widths) - 1)
+    x = max(0, (PANEL_WIDTH - total_w) // 2)
+    y = 0
+    for ch, width in zip(text, widths):
+        if ch == ":":
+            draw.rectangle((x, y + 4, x + 2, y + 6), fill=fg)
+            draw.rectangle((x, y + 10, x + 2, y + 12), fill=fg)
+        elif ch in SEGMENTS:
+            _draw_digit(draw, x, y, SEGMENTS[ch], fg)
+        x += width + gap
     return img
+
+
+def _draw_digit(draw: ImageDraw.ImageDraw, x: int, y: int, segments: str, fg) -> None:
+    # 8x15 digit using 3-pixel strokes.
+    rects = {
+        "a": (x + 1, y, x + 6, y + 2),
+        "b": (x, y + 1, x + 2, y + 6),
+        "c": (x + 5, y + 1, x + 7, y + 6),
+        "d": (x + 1, y + 12, x + 6, y + 14),
+        "e": (x, y + 8, x + 2, y + 13),
+        "f": (x + 5, y + 8, x + 7, y + 13),
+        "g": (x + 1, y + 6, x + 6, y + 8),
+    }
+    for seg in segments:
+        draw.rectangle(rects[seg], fill=fg)
 
 
 def render_date(settings: dict, now: datetime | None = None) -> Image.Image:
