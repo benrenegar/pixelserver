@@ -176,8 +176,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def connect_panel(self, p):
         address = self.selected_address(p)
         if not address:
-            self.set2026-06-30 14:56:38,895 INFO [ledpanel_manager.ipixel] pypixelcolor is not installed; using built-in bleak transport
-_status("Select a panel before connecting")
+            self.set_status("Select a panel before connecting")
             return
         p.connect_button.set_sensitive(False)
         p.connection_status.set_text("◌ Connecting...")
