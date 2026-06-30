@@ -9,8 +9,28 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .models import FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
 
-FONT_DIR = Path(__file__).parent / "fonts"
-FONT_ALIASES = {"VCR OSD Mono": FONT_DIR / "VCR-OSD-Mono.ttf"}
+PACKAGE_DIR = Path(__file__).parent
+FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
+DIGIT_DIRS = [PACKAGE_DIR / "digits", PACKAGE_DIR.parent / "digits"]
+CLOCK_CHARACTER_SPACING = 3
+
+
+def discover_fonts() -> dict[str, Path]:
+    fonts: dict[str, Path] = {}
+    for font_dir in FONT_DIRS:
+        if not font_dir.exists():
+            continue
+        for path in sorted(font_dir.glob("*.ttf")):
+            fonts[path.stem.replace("-", " ").replace("_", " ")] = path
+    # Keep the original friendly name if the requested file is present.
+    for path in FONT_DIRS:
+        vcr = path / "VCR-OSD-Mono.ttf"
+        if vcr.exists():
+            fonts["VCR OSD Mono"] = vcr
+    return fonts
+
+
+FONT_ALIASES = discover_fonts() or {"Default": Path()}
 _SCROLLING = {"Right to left", "Left to right", "Top to bottom", "Bottom to top"}
 _feed_cache: dict[str, tuple[float, list[str]]] = {}
 _live_cache: dict[str, tuple[float, str]] = {}
@@ -21,6 +41,31 @@ def load_font(name: str, size: int) -> ImageFont.ImageFont:
     if path and path.exists():
         return ImageFont.truetype(str(path), size=size)
     return ImageFont.load_default()
+
+
+def _digit_asset_path(name: str) -> Path | None:
+    for digit_dir in DIGIT_DIRS:
+        path = digit_dir / name
+        if path.exists():
+            return path
+    return None
+
+
+def _clock_bitmap(name: str, foreground: tuple[int, int, int], background: tuple[int, int, int]) -> Image.Image | None:
+    path = _digit_asset_path(name)
+    if path is None:
+        return None
+    src = Image.open(path).convert("RGBA")
+    alpha = src.getchannel("A")
+    luminance = src.convert("L")
+    mask = Image.new("L", src.size, 0)
+    for y in range(src.height):
+        for x in range(src.width):
+            visible = alpha.getpixel((x, y)) > 0 and luminance.getpixel((x, y)) >= 128
+            mask.putpixel((x, y), 255 if visible else 0)
+    out = Image.new("RGB", src.size, background)
+    out.paste(Image.new("RGB", src.size, foreground), mask=mask)
+    return out
 
 
 def quantize_panel(img: Image.Image) -> Image.Image:
@@ -158,7 +203,49 @@ def draw_digit(draw: ImageDraw.ImageDraw, x: int, digit: str, color: tuple[int, 
         draw.rectangle(rects[s], fill=color)
 
 
+def _render_bitmap_clock(settings: dict, tick: int = 0) -> Image.Image | None:
+    bg = tuple(settings.get("background", (0, 0, 0)))
+    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    now = time.localtime()
+    hour = now.tm_hour
+    suffix = None
+    if settings.get("time_mode") == "12-hour":
+        suffix = "am.png" if hour < 12 else "pm.png"
+        hour = hour % 12 or 12
+    parts = list(f"{hour:02d}:{now.tm_min:02d}")
+    if settings.get("show_seconds"):
+        parts.extend(list(f":{now.tm_sec:02d}"))
+    bitmaps: list[Image.Image] = []
+    for ch in parts:
+        if ch == ":" and settings.get("flash_separator") and tick % 2:
+            sep = _clock_bitmap("separator.png", bg, bg)
+        elif ch == ":":
+            sep = _clock_bitmap("separator.png", fg, bg)
+        else:
+            sep = _clock_bitmap(f"digit-{ch}.png", fg, bg)
+        if sep is None:
+            return None
+        bitmaps.append(sep)
+    if suffix:
+        suffix_img = _clock_bitmap(suffix, fg, bg)
+        if suffix_img is None:
+            return None
+        bitmaps.append(suffix_img)
+    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
+    icon_x = _paste_icon(img, _load_icon(settings.get("icon_path")))
+    total_w = sum(part.width for part in bitmaps) + CLOCK_CHARACTER_SPACING * max(0, len(bitmaps) - 1)
+    x = icon_x + max(0, (PANEL_WIDTH - icon_x - total_w) // 2)
+    for part in bitmaps:
+        y = max(0, (PANEL_HEIGHT - part.height) // 2)
+        img.paste(part, (x, y))
+        x += part.width + CLOCK_CHARACTER_SPACING
+    return quantize_panel(img)
+
+
 def render_clock(settings: dict, tick: int = 0) -> Image.Image:
+    bitmap = _render_bitmap_clock(settings, tick)
+    if bitmap is not None:
+        return bitmap
     bg = tuple(settings.get("background", (0, 0, 0)))
     fg = tuple(settings.get("foreground", (255, 255, 0)))
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)

@@ -12,7 +12,7 @@ pypixelcolor = ["pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git"
 ledpanel-manager = "ledpanel_manager.app:main"
 
 [tool.setuptools.package-data]
-ledpanel_manager = ["fonts/*.ttf"]
+ledpanel_manager = ["fonts/*.ttf", "digits/*.png"]
 
 [build-system]
 requires = ["setuptools"]

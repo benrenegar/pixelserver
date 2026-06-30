@@ -11,6 +11,10 @@ A Debian/Linux GTK client for iPixel Color BLE LED matrix panels, initially targ
 - Pillow-based rendering for custom clock/date/images and text preview.
 - BLE sender abstraction that uses `pypixelcolor` for panel updates, with the experimental bleak/raw-write transport available only when explicitly enabled for debugging.
 
+## Assets
+
+Font drop-downs are populated from TTF files in either `ledpanel_manager/fonts/` or a checkout-level `fonts/` directory. Clock bitmap mode looks for `digit-0.png` through `digit-9.png`, `separator.png`, `am.png`, and `pm.png` in either `ledpanel_manager/digits/` or a checkout-level `digits/` directory. Set `CLOCK_CHARACTER_SPACING` in `ledpanel_manager/rendering.py` to adjust clock bitmap spacing; it defaults to 3 pixels.
+
 ## Run on Debian 13
 
 Debian 13 follows PEP 668, so `python3 -m pip install --user -e .` can fail with `externally-managed-environment`. Use Debian packages for runtime dependencies, then either run from the checkout or install the console script inside a virtual environment. The virtual environment option is recommended if you want the app to use `pypixelcolor`, because Debian's `/usr/bin/python3` will not automatically import packages just because a `pypixelcolor` command exists in `~/.local/bin`.
