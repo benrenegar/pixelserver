@@ -1,7 +1,7 @@
 [project]
 name = "ledpanel-manager"
 version = "0.1.0"
-description = "GTK Linux client for iPixel Color 16x64 BLE LED matrix panels"
+description = "Web service for iPixel Color BLE LED matrix panels"
 requires-python = ">=3.11"
 dependencies = []
 
