@@ -1,7 +1,7 @@
 [project]
 name = "ledpanel-manager"
 version = "0.1.0"
-description = "GTK Linux client for iPixel Color 16x64 BLE LED matrix panels"
+description = "Web service for iPixel Color BLE LED matrix panels"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -12,7 +12,7 @@ pypixelcolor = ["pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git"
 ledpanel-manager = "ledpanel_manager.app:main"
 
 [tool.setuptools.package-data]
-ledpanel_manager = ["fonts/*.ttf", "digits/*.png"]
+ledpanel_manager = ["fonts/*.ttf", "digits/*.png", "static/*.css"]
 
 [build-system]
 requires = ["setuptools"]

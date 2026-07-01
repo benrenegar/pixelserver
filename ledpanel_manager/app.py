@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import asyncio, json, logging, os, shutil, threading, time
+import asyncio, base64, json, logging, mimetypes, os, shutil, threading, time, uuid
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import gi
-gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk, GLib, Gdk, Gio
+from urllib.parse import parse_qs, urlparse
 from PIL import Image
-from .models import FrameConfig, FrameType, PanelState, PANEL_WIDTH, PANEL_HEIGHT
-from .rendering import render_frame, FONT_ALIASES
+from .models import FrameConfig, FrameType, PanelState, PANEL_HEIGHT, PANEL_WIDTH
+from .rendering import FONT_ALIASES, render_frame
 from .ipixel import IPixelClient, discover_panels
 
 LOG_LEVEL = os.environ.get("LEDPANEL_LOG_LEVEL", "INFO").upper()
@@ -15,11 +15,23 @@ logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(a
 logging.getLogger("bleak").setLevel(logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ledpanel-manager"
+
+CONFIG_DIR = Path(os.environ.get("LEDPANEL_CONFIG_DIR", Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "ledpanel-manager"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
 ASSET_DIR = CONFIG_DIR / "assets"
-PANEL_PLACEHOLDER_ITEMS = ("Panel MAC Address", "Discovering panels...", "No panels found")
-IMAGE_FILTERS = ("*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp")
+DRAWING_DIR = ASSET_DIR / "drawings"
+DIGIT_OVERRIDE_DIR = ASSET_DIR / "clock-digits"
+HOST = os.environ.get("LEDPANEL_HOST", "0.0.0.0")
+PORT = int(os.environ.get("LEDPANEL_PORT", "8765"))
+PANEL_PLACEHOLDER_ITEMS = {"Discovering panels...", "No panels found"}
+
+
+def _jsonable_panel(p: PanelState) -> dict:
+    return {
+        "name": p.name, "address": p.address, "connected": p.connected, "running": p.running,
+        "brightness": p.brightness, "started_at": p.started_at,
+        "frames": [{"frame_type": f.frame_type.value, "duration": f.duration, "settings": f.settings} for f in p.frames],
+    }
 
 
 class PanelConnection:
@@ -38,269 +50,214 @@ class PanelConnection:
         finally: self.loop.call_soon_threadsafe(self.loop.stop)
 
 
-class PixelPreview(Gtk.DrawingArea):
-    def __init__(self, width=720, height=120):
-        super().__init__(); self.image = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT)); self.set_content_width(width); self.set_content_height(height); self.set_draw_func(self.draw)
-    def set_image(self, image): self.image = image.copy(); self.queue_draw()
-    def draw(self, area, cr, w, h):
-        cell = min(w / PANEL_WIDTH, h / PANEL_HEIGHT); ox=(w-cell*PANEL_WIDTH)/2; oy=(h-cell*PANEL_HEIGHT)/2
-        cr.set_source_rgb(0,0,0); cr.rectangle(ox,oy,cell*PANEL_WIDTH,cell*PANEL_HEIGHT); cr.fill()
-        px=self.image.load()
-        for y in range(PANEL_HEIGHT):
-            for x in range(PANEL_WIDTH):
-                r,g,b=px[x,y]; cr.set_source_rgb(r/255,g/255,b/255); cr.arc(ox+x*cell+cell/2, oy+y*cell+cell/2, max(1,cell*.28), 0, 6.283); cr.fill()
-
-
-class FrameDialog(Gtk.Dialog):
-    def __init__(self, parent, frame):
-        super().__init__(title=f"{frame.frame_type.value} Settings", transient_for=parent, modal=True)
-        self.frame=frame; self.settings=frame.merged_settings(); self.widgets={}; self.tick=0
-        box=self.get_content_area(); box.set_spacing(10); box.set_margin_top(14); box.set_margin_bottom(14); box.set_margin_start(14); box.set_margin_end(14)
-        title=Gtk.Label(label=f"Configure {frame.frame_type.value.lower()}"); title.add_css_class("title-2"); title.set_halign(Gtk.Align.START); box.append(title)
-        self.preview=PixelPreview(520, 90); box.append(self.preview)
-        self.build(box); self.add_button("Cancel", Gtk.ResponseType.CANCEL); self.add_button("Apply", Gtk.ResponseType.OK)
-        self.connect_live_updates(); self.update_preview(); GLib.timeout_add(500, self.preview_tick)
-    def row(self, box, label, widget): l=Gtk.Label(label=label); l.set_halign(Gtk.Align.START); box.append(l); box.append(widget)
-    def grid_pair(self, box, left_label, left_widget, right_label, right_widget):
-        grid=Gtk.Grid(column_spacing=10,row_spacing=6); box.append(grid)
-        grid.attach(Gtk.Label(label=left_label),0,0,1,1); grid.attach(left_widget,1,0,1,1); grid.attach(Gtk.Label(label=right_label),2,0,1,1); grid.attach(right_widget,3,0,1,1)
-    def combo(self, key, vals):
-        c=Gtk.ComboBoxText(); [c.append_text(v) for v in vals]; c.set_active(vals.index(self.settings.get(key, vals[0])) if self.settings.get(key) in vals else 0); self.widgets[key]=c; return c
-    def spin(self, key, low, high, step=1): sp=Gtk.SpinButton.new_with_range(low, high, step); sp.set_value(self.settings.get(key, 0)); self.widgets[key]=sp; return sp
-    def entry(self, key): e=Gtk.Entry(text=str(self.settings.get(key, "") or "")); self.widgets[key]=e; return e
-    def color_button(self, key):
-        btn=Gtk.ColorButton(); c=Gdk.RGBA(); r,g,b=self.settings.get(key,(0,0,0)); c.red=r/255; c.green=g/255; c.blue=b/255; c.alpha=1; btn.set_rgba(c); self.widgets[key]=btn; return btn
-    def file_button(self, key, label="Select file"):
-        btn=Gtk.Button(label=Path(self.settings.get(key) or "").name or label)
-        def choose(_):
-            dlg=Gtk.FileChooserNative(title=label, transient_for=self, action=Gtk.FileChooserAction.OPEN)
-            dlg.connect("response", lambda d,r: self.pick_file(d,r,key,btn)); dlg.show()
-        btn.connect("clicked", choose); self.widgets[key]=btn; return btn
-    def pick_file(self, dlg, resp, key, btn):
-        if resp == Gtk.ResponseType.ACCEPT:
-            self.settings[key]=dlg.get_file().get_path(); btn.set_label(Path(self.settings[key]).name); self.update_preview()
-    def add_icon_and_colors(self, box):
-        self.row(box,"Icon", self.file_button("icon_path", "Select icon"))
-        grid=Gtk.Grid(column_spacing=24,row_spacing=8); box.append(grid)
-        for i,k in enumerate(("foreground","background")): grid.attach(Gtk.Label(label=k.title()+" color"),i,0,1,1); grid.attach(self.color_button(k),i,1,1,1)
-    def add_font_spacing(self, box):
-        self.grid_pair(box, "Font", self.combo("font", list(FONT_ALIASES) or ["Default"]), "Font size", self.spin("font_size",7,48))
-        self.grid_pair(box, "Horizontal spacing", self.spin("horizontal_spacing",-5,20), "Vertical offset", self.spin("vertical_offset",-16,16))
-    def build(self, box):
-        ft=self.frame.frame_type
-        if ft is FrameType.TEXT:
-            tv=Gtk.TextView(); tv.get_buffer().set_text(self.settings.get("message","")); tv.set_size_request(420,70); self.widgets["message"]=tv; self.row(box,"Message",tv)
-        elif ft is FrameType.DATE:
-            self.row(box,"Date format", self.entry("date_format"))
-        elif ft is FrameType.RSS:
-            self.row(box,"Feed URL", self.entry("feed_url")); self.row(box,"Number of items", self.spin("item_count",1,20)); self.row(box,"Scroll speed", self.spin("scroll_speed",1,20))
-        elif ft is FrameType.LIVE_TEXT:
-            self.row(box,"Label", self.entry("label")); self.row(box,"REST URL", self.entry("rest_url"))
-        elif ft is FrameType.IMAGE:
-            self.row(box,"Image file", self.file_button("path", "Select image")); self.row(box,"Image display", self.combo("display", ["Resize to fit","Stretch to fit","Crop to fit"]))
-        if ft in (FrameType.TEXT, FrameType.DATE, FrameType.CLOCK, FrameType.RSS, FrameType.LIVE_TEXT): self.add_icon_and_colors(box)
-        if ft in (FrameType.TEXT, FrameType.DATE, FrameType.RSS, FrameType.LIVE_TEXT): self.add_font_spacing(box)
-        if ft in (FrameType.TEXT, FrameType.LIVE_TEXT): self.row(box,"Scrolling", self.combo("scrolling", ["None (Wrap)","Right to left","Left to right","Top to bottom","Bottom to top"])); self.row(box,"Scroll speed", self.spin("scroll_speed",1,20))
-        if ft is FrameType.CLOCK:
-            self.row(box,"12/24 hour time", self.combo("time_mode", ["24-hour","12-hour"]))
-            for key,label in (("show_seconds","Show seconds"),("flash_separator","Flash separator")):
-                chk=Gtk.CheckButton(label=label); chk.set_active(self.settings.get(key,False)); self.widgets[key]=chk; box.append(chk)
-    def collect(self):
-        data=dict(self.settings)
-        for k,w in self.widgets.items():
-            if isinstance(w,Gtk.ColorButton): c=w.get_rgba(); data[k]=(round(c.red*255),round(c.green*255),round(c.blue*255))
-            elif isinstance(w,Gtk.ComboBoxText): data[k]=w.get_active_text()
-            elif isinstance(w,Gtk.SpinButton): data[k]=int(w.get_value())
-            elif isinstance(w,Gtk.Scale): data[k]=int(w.get_value())
-            elif isinstance(w,Gtk.CheckButton): data[k]=w.get_active()
-            elif isinstance(w,Gtk.Entry): data[k]=w.get_text()
-            elif isinstance(w,Gtk.TextView): buf=w.get_buffer(); data[k]=buf.get_text(buf.get_start_iter(),buf.get_end_iter(),False)
-        return data
-    def apply(self): self.frame.settings=self.collect()
-    def update_preview(self, *_):
-        temp=FrameConfig(self.frame.frame_type, self.frame.duration, self.collect())
-        self.preview.set_image(render_frame(temp, self.tick))
-    def preview_tick(self): self.tick+=1; self.update_preview(); return self.get_visible()
-    def connect_live_updates(self):
-        for w in self.widgets.values():
-            if isinstance(w,Gtk.ColorButton): w.connect("color-set", self.update_preview)
-            elif isinstance(w,Gtk.ComboBoxText): w.connect("changed", self.update_preview)
-            elif isinstance(w,Gtk.SpinButton): w.connect("value-changed", self.update_preview)
-            elif isinstance(w,Gtk.Scale): w.connect("value-changed", self.update_preview)
-            elif isinstance(w,Gtk.CheckButton): w.connect("toggled", self.update_preview)
-            elif isinstance(w,Gtk.Entry): w.connect("changed", self.update_preview)
-            elif isinstance(w,Gtk.TextView): w.get_buffer().connect("changed", self.update_preview)
-
-
-class MainWindow(Gtk.ApplicationWindow):
-    def __init__(self, app):
-        super().__init__(application=app, title="LED Matrix Manager"); self.set_default_size(1040,720)
-        self.panels=self.load_state(); self.discovered_count=0; self.discovered_addresses=[]; self.discovery_complete=False
-        self.status_label=Gtk.Label(label="Ready"); self.status_bar=Gtk.ActionBar(); self.status_bar.pack_start(self.status_label); self.tabs=Gtk.Notebook(); self.build(); self.start_discovery()
-    def build(self):
-        root=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); root.set_margin_top(10); root.set_margin_start(10); root.set_margin_end(10); self.set_child(root)
-        title=Gtk.Label(label="LED Matrix Manager"); title.add_css_class("title-1"); title.set_halign(Gtk.Align.START); root.append(title); self.tabs.set_vexpand(True); root.append(self.tabs); root.append(self.status_bar); self.refresh_tabs()
-    def load_state(self):
-        try: raw=json.loads(CONFIG_FILE.read_text())
+class LedPanelService:
+    def __init__(self):
+        self.lock = threading.RLock(); self.panels = self.load_state(); self.discovered_addresses: list[str] = sorted({p.address for p in self.panels if p.address})
+        self.discovery_complete = False; self.status = "Starting"; self.messages: list[str] = []; self.tick = 0; self.last_images: dict[int, Image.Image] = {}
+        self._stop = threading.Event(); self.set_status("Starting")
+    def load_state(self) -> list[PanelState]:
+        try: raw = json.loads(CONFIG_FILE.read_text())
         except Exception: return [PanelState("Panel 1")]
         panels=[]
         for pd in raw.get("panels", []):
-            frames=[FrameConfig(FrameType(fd.get("frame_type", "Text")), fd.get("duration",10), fd.get("settings",{})) for fd in pd.get("frames", [])]
-            panels.append(PanelState(pd.get("name","Panel"), pd.get("address"), False, frames or [FrameConfig()], False, pd.get("brightness",80)))
+            frames=[]
+            for fd in pd.get("frames", []):
+                try: ft = FrameType(fd.get("frame_type", "Text"))
+                except ValueError: continue
+                frames.append(FrameConfig(ft, fd.get("duration", 10), fd.get("settings", {})))
+            panels.append(PanelState(pd.get("name", "Panel"), pd.get("address"), bool(pd.get("connected", False)), frames or [FrameConfig()], bool(pd.get("running", False)), pd.get("brightness", 80)))
         return panels or [PanelState("Panel 1")]
-    def persist_path(self, path):
-        if not path: return path
-        try:
-            ASSET_DIR.mkdir(parents=True, exist_ok=True); src=Path(path); dest=ASSET_DIR / src.name
-            if src.exists() and src.resolve() != dest.resolve(): shutil.copy2(src, dest)
-            return str(dest)
-        except Exception: return path
     def save_state(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        for p in self.panels:
-            for fr in p.frames:
-                for key in ("path","icon_path"):
-                    if fr.settings.get(key): fr.settings[key]=self.persist_path(fr.settings[key])
-        data={"panels":[{"name":p.name,"address":p.address,"brightness":p.brightness,"frames":[{"frame_type":f.frame_type.value,"duration":f.duration,"settings":f.settings} for f in p.frames]} for p in self.panels]}
+        data={"panels":[{"name":p.name,"address":p.address,"connected":p.connected,"running":p.running,"brightness":p.brightness,"frames":[{"frame_type":f.frame_type.value,"duration":f.duration,"settings":f.settings} for f in p.frames]} for p in self.panels]}
         CONFIG_FILE.write_text(json.dumps(data, indent=2))
-    def refresh_tabs(self):
-        while self.tabs.get_n_pages(): self.tabs.remove_page(0)
-        for p in self.panels: self.tabs.append_page(self.panel_page(p), Gtk.Label(label=p.name))
-        add=Gtk.Button(label="✚ Add Panel"); add.connect("clicked", lambda _: (self.panels.append(PanelState(f"Panel {len(self.panels)+1}")), self.save_state(), self.refresh_tabs())); self.tabs.append_page(Gtk.Box(), add)
-    def panel_page(self,p):
-        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); box.set_margin_top(20); box.set_margin_bottom(20); box.set_margin_start(20); box.set_margin_end(20)
-        combo=Gtk.ComboBoxText(); p.combo=combo; self.populate_panel_combo(p)
-        p.connection_status=Gtk.Label(label="● Connected" if p.connected else "○ Disconnected"); p.connect_button=Gtk.Button(label="Disconnect" if p.connected else "Connect"); p.connect_button.connect("clicked", lambda _: self.toggle_connection(p))
-        p.brightness_scale=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,0,100,1); p.brightness_scale.set_value(getattr(p,"brightness",80)); p.brightness_scale.set_size_request(160,-1); p.brightness_scale.set_sensitive(p.connected); p.brightness_scale.connect("value-changed", lambda s: self.brightness_changed(p, int(s.get_value())))
-        head=Gtk.Box(spacing=12); [head.append(w) for w in (Gtk.Label(label="Panel"),combo,p.connect_button,p.connection_status,Gtk.Label(label="Brightness"),p.brightness_scale)]; box.append(head)
-        p.preview=PixelPreview(); box.append(p.preview)
-        p.display_button=Gtk.Button(label="Stop Display" if p.running else "Start Display"); p.display_button.connect("clicked", lambda _: self.toggle_display(p)); p.display_status=Gtk.Label(label="Running" if p.running else "Stopped"); clear=Gtk.Button(label="Clear Display"); clear.connect("clicked", lambda _: self.clear_display(p))
-        controls=Gtk.Box(spacing=12); [controls.append(w) for w in (p.display_button,p.display_status,clear)]; box.append(controls)
-        p.frames_box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6); box.append(p.frames_box); self.refresh_frames(p); add=Gtk.Button(label="✚ Add Frame"); add.connect("clicked", lambda _: (p.frames.append(FrameConfig()), self.save_state(), self.refresh_frames(p))); box.append(add); return box
-    def refresh_frames(self,p):
-        while (child:=p.frames_box.get_first_child()): p.frames_box.remove(child)
-        multi=len(p.frames)>1
-        for i,f in enumerate(p.frames):
-            row=Gtk.Box(spacing=8); row.set_margin_top(10); row.set_margin_bottom(10); row.set_margin_start(10); row.set_margin_end(10)
-            typec=Gtk.ComboBoxText(); [typec.append_text(t.value) for t in FrameType]; typec.set_active(list(FrameType).index(f.frame_type)); typec.connect("changed", lambda c,fr=f: (setattr(fr,"frame_type", FrameType(c.get_active_text())), setattr(fr,"settings",{}), self.save_state()))
-            dur=Gtk.SpinButton.new_with_range(1,3600,1); dur.set_value(f.duration); dur.set_sensitive(multi); dur.connect("value-changed", lambda s,fr=f: (setattr(fr,"duration",s.get_value()), self.save_state()))
-            settings=Gtk.Button(label="🔧 Settings"); settings.connect("clicked", lambda _,fr=f: self.open_settings(fr))
-            left=Gtk.Box(spacing=8); [left.append(w) for w in (Gtk.Label(label="Type"), typec, Gtk.Label(label="Duration (secs)"), dur, settings)]; left.set_hexpand(True); row.append(left)
-            up=Gtk.Button(label="▲"); down=Gtk.Button(label="▼"); rem=Gtk.Button(label="✖"); up.set_sensitive(multi and i>0); down.set_sensitive(multi and i<len(p.frames)-1); rem.set_sensitive(multi)
-            up.connect("clicked", lambda _,idx=i: self.move(p,idx,-1)); down.connect("clicked", lambda _,idx=i: self.move(p,idx,1)); rem.connect("clicked", lambda _,fr=f: (p.frames.remove(fr), self.save_state(), self.refresh_frames(p)))
-            [row.append(w) for w in (up,down,rem)]; group=Gtk.Frame(label=f"Frame {i+1}"); group.set_child(row); p.frames_box.append(group)
-    def move(self,p,i,d):
-        j=i+d
-        if 0<=j<len(p.frames): p.frames[i],p.frames[j]=p.frames[j],p.frames[i]; self.save_state(); self.refresh_frames(p)
-    def open_settings(self,fr):
-        dlg=FrameDialog(self,fr); dlg.connect("response", lambda d,r: (d.apply() if r==Gtk.ResponseType.OK else None, self.save_state() if r==Gtk.ResponseType.OK else None, d.destroy())); dlg.show()
-    def populate_panel_combo(self, p):
-        p.combo.remove_all()
-        if not self.discovery_complete: p.combo.append_text("Discovering panels..."); p.combo.set_active(0); p.combo.set_sensitive(False); return
-        if not self.discovered_addresses: p.combo.append_text("No panels found"); p.combo.set_active(0); p.combo.set_sensitive(False); return
-        for address in self.discovered_addresses: p.combo.append_text(address)
-        if p.address and p.address in self.discovered_addresses: p.combo.set_active(self.discovered_addresses.index(p.address))
-        else: p.combo.set_active(0)
-        p.combo.set_sensitive(True)
-    def start_discovery(self): threading.Thread(target=self.discovery_worker, daemon=True).start()
-    def discovery_worker(self): asyncio.run(discover_panels(lambda d: GLib.idle_add(self.add_discovered,d), 4.0)); GLib.idle_add(self.discovery_finished)
-    def add_discovered(self,d):
-        if d.address in self.discovered_addresses: return
-        self.discovered_addresses.append(d.address); self.discovered_count=len(self.discovered_addresses)
-        for p in self.panels:
-            if hasattr(p,"combo"):
-                if self.discovered_count == 1: p.combo.remove_all()
-                p.combo.append_text(d.address)
-                if p.combo.get_active() < 0: p.combo.set_active(0)
-        self.set_status(f"Discovered {d.name} at {d.address}")
-    def discovery_finished(self): self.discovery_complete=True; [self.populate_panel_combo(p) for p in self.panels if hasattr(p,"combo")]; self.set_status("No panels found" if self.discovered_count==0 else "Discovery finished")
-    def set_status(self, message): self.status_label.set_text(message)
-    def selected_address(self, p):
-        active = p.combo.get_active_text() if hasattr(p, "combo") else p.address
-        if active and active not in PANEL_PLACEHOLDER_ITEMS: p.address = active; self.save_state()
-        return p.address
-    def toggle_connection(self, p): self.disconnect_panel(p) if getattr(p, "connection", None) else self.connect_panel(p)
-    def connect_panel(self, p):
-        address = self.selected_address(p)
-        if not address: self.set_status("Select a panel before connecting"); return
-        p.connect_button.set_sensitive(False); p.connection_status.set_text("◌ Connecting..."); self.set_status(f"Connecting to {address}"); threading.Thread(target=self.connect_worker, args=(p, address), daemon=True).start()
-    def connect_worker(self, p, address):
-        connection = PanelConnection(address)
-        try: connection.connect().result(timeout=30)
+    def start(self):
+        for idx, p in enumerate(self.panels):
+            if p.address and p.connected:
+                should_play = p.running
+                p.running = False
+                self.connect(idx, autostart=should_play)
+    def set_status(self, message: str):
+        with self.lock:
+            self.status = message
+            self.messages.append(f"{time.strftime('%H:%M:%S')}  {message}")
+            self.messages = self.messages[-200:]
+    def scan_once(self):
+        try:
+            found=[]
+            asyncio.run(discover_panels(lambda d: found.append(d.address), 5.0))
+            with self.lock:
+                self.discovered_addresses = sorted(set(found)); self.discovery_complete = True
+            self.set_status(f"Discovered {len(found)} panel(s)")
         except Exception as exc:
-            logger.exception("Bluetooth connection failed")
-            try: connection.disconnect()
-            except Exception: logger.debug("Bluetooth cleanup failed", exc_info=True)
-            GLib.idle_add(self.connection_finished, p, None, f"Bluetooth connection failed; see terminal: {exc}"); return
-        GLib.idle_add(self.connection_finished, p, connection, f"Connected to {address}")
-    def connection_finished(self, p, connection, message):
-        p.connection=connection; p.connected=connection is not None; p.connect_button.set_label("Disconnect" if p.connected else "Connect"); p.connect_button.set_sensitive(True); p.connection_status.set_text("● Connected" if p.connected else "○ Disconnected"); p.brightness_scale.set_sensitive(p.connected); self.set_status(message)
-    def disconnect_panel(self, p):
-        connection=getattr(p,"connection",None)
-        if connection is None: return
-        p.connect_button.set_sensitive(False); p.connection_status.set_text("◌ Disconnecting..."); self.set_status(f"Disconnecting from {p.address}"); threading.Thread(target=self.disconnect_worker, args=(p, connection), daemon=True).start()
-    def disconnect_worker(self, p, connection):
-        try: connection.disconnect(); message=f"Disconnected from {p.address}"
-        except Exception as exc: logger.exception("Bluetooth disconnect failed"); message=f"Bluetooth disconnect failed; see terminal: {exc}"
-        GLib.idle_add(self.connection_finished, p, None, message)
-    def toggle_display(self,p): self.stop_panel(p) if p.running else self.start_panel(p)
-    def start_panel(self,p):
-        self.selected_address(p); p.running=True; p.display_button.set_label("Stop Display"); p.display_status.set_text("Running"); self.set_status("Display running" if getattr(p,"connection",None) else "Preview running (panel not connected)"); threading.Thread(target=self.run_loop,args=(p,),daemon=True).start()
-    def stop_panel(self,p): p.running=False; p.display_button.set_label("Start Display"); p.display_status.set_text("Stopped"); self.set_status("Display stopped")
-    def run_loop(self,p): asyncio.run(self.run_loop_async(p))
-    async def run_loop_async(self,p):
-        tick=0
-        last_panel_send = 0.0
+            logger.exception("Panel discovery failed"); self.set_status(f"Discovery failed: {exc}")
+    def discovery_worker(self):
+        while not self._stop.is_set():
+            self.scan_once()
+            self._stop.wait(60)
+    def connect(self, idx: int, autostart: bool=False):
+        threading.Thread(target=self._connect_worker, args=(idx, autostart), daemon=True).start()
+    def _connect_worker(self, idx: int, autostart: bool):
+        p=self.panels[idx]
+        if not p.address:
+            self.set_status("Select a panel before connecting")
+            return
+        try:
+            conn=PanelConnection(p.address); conn.connect().result(timeout=30); conn.set_brightness(p.brightness).result(timeout=10)
+            with self.lock: p.connection=conn; p.connected=True
+            self.set_status(f"Connected to {p.address}"); self.save_state()
+            if autostart: self.play(idx)
+        except Exception as exc:
+            logger.exception("Connect failed"); self.set_status(f"Connect failed: {exc}")
+    def disconnect(self, idx:int):
+        p=self.panels[idx]; p.running=False; conn=getattr(p,"connection",None)
+        if conn: threading.Thread(target=lambda: conn.disconnect(), daemon=True).start()
+        p.connected=False; p.connection=None; self.set_status(f"Disconnected from {p.address or p.name}"); self.save_state()
+    def play(self, idx:int):
+        p=self.panels[idx]
+        if p.running: return
+        p.running=True; p.started_at=time.time(); self.set_status(f"Playback started for {p.name}"); threading.Thread(target=self._run_panel, args=(idx,), daemon=True).start(); self.save_state()
+    def stop(self, idx:int):
+        p=self.panels[idx]; p.running=False; p.started_at=None; self.set_status(f"Playback stopped for {p.name}"); self.save_state()
+    def _run_panel(self, idx:int):
+        p=self.panels[idx]; last_send=0.0
         while p.running:
             for fr in list(p.frames):
-                end=time.monotonic()+fr.duration
+                end=time.monotonic()+float(fr.duration)
                 while p.running and time.monotonic()<end:
-                    img=render_frame(fr,tick); GLib.idle_add(p.preview.set_image,img); connection=getattr(p,"connection",None)
-                    now = time.monotonic()
-                    if connection is not None and now - last_panel_send >= 1.0:
-                        try:
-                            await asyncio.wrap_future(connection.send_image(img))
-                            last_panel_send = now
+                    img=render_frame(fr,self.tick); self.last_images[idx]=img; conn=getattr(p,"connection",None); now=time.monotonic()
+                    if conn and now-last_send>=1:
+                        try: conn.send_image(img).result(timeout=20); last_send=now
                         except Exception as exc:
-                            logger.exception("Bluetooth send failed")
-                            GLib.idle_add(self.set_status, f"Bluetooth send failed; reconnecting: {exc}")
-                            last_panel_send = now
-                            await asyncio.to_thread(self.reconnect_panel_after_send_failure, p, connection)
-                    tick+=1; await asyncio.sleep(.25)
+                            logger.exception("Send failed"); p.connected=False; p.connection=None; self.set_status(f"Send failed; reconnecting: {exc}"); self._connect_worker(idx, False); last_send=now
+                    self.tick+=1; time.sleep(.25)
+    def state(self):
+        with self.lock: return {"status": self.status, "messages": self.messages, "discovered": sorted(set(self.discovered_addresses) | {p.address for p in self.panels if p.address}), "fonts": list(FONT_ALIASES), "width": PANEL_WIDTH, "height": PANEL_HEIGHT, "frame_types": [t.value for t in FrameType], "panels": [_jsonable_panel(p) for p in self.panels]}
 
-    def reconnect_panel_after_send_failure(self, p, old_connection):
-        GLib.idle_add(self.set_status, f"Connection lost; reconnecting to {p.address}")
+SERVICE = LedPanelService()
+
+HTML = r'''<!doctype html><html><head><meta charset="utf-8"><title>LED Matrix Manager</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/themes/light.css"><link rel="stylesheet" href="/static/app.css"><script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/shoelace-autoloader.js"></script></head><body>
+<div class=top><h1>LED Matrix Manager</h1></div><div id=app></div>
+<div id=modal class=modal><div class=dialog><div id=modalBody></div></div></div>
+<script>
+let S, edit={panel:0, frame:0}, drawPixels=[], drawW=96, drawH=16; const W=96,H=16, off=[39,43,49];
+const api=(p,o={})=>fetch('/api/'+p,{headers:{'content-type':'application/json'},...o}).then(r=>r.json());
+const app=document.getElementById('app'), modal=document.getElementById('modal'), modalBody=document.getElementById('modalBody');
+function drawCanvas(canvas,pixels,scale=10){let targetW=W*scale,targetH=H*scale;if(canvas.width!==targetW)canvas.width=targetW;if(canvas.height!==targetH)canvas.height=targetH;canvas.style.width=canvas.closest('.modal')?targetW+'px':'100%';canvas.style.height='auto';let ctx=canvas.getContext('2d');ctx.fillStyle='#111';ctx.fillRect(0,0,targetW,targetH);for(let y=0;y<H;y++)for(let x=0;x<W;x++){let c=pixels?.[y]?.[x]||[0,0,0],on=c.some(v=>v),cc=on?c:off;ctx.fillStyle=`rgb(${cc[0]},${cc[1]},${cc[2]})`;ctx.beginPath();ctx.arc(x*scale+scale/2,y*scale+scale/2,scale*.32,0,Math.PI*2);ctx.fill()}}
+function drawEditor(canvas,pixels,w,h,scale=18){canvas.width=w*scale;canvas.height=h*scale;let ctx=canvas.getContext('2d');ctx.fillStyle='#111';ctx.fillRect(0,0,canvas.width,canvas.height);for(let y=0;y<h;y++)for(let x=0;x<w;x++){let c=pixels[y][x],cc=c.some(v=>v)?c:off;ctx.fillStyle=`rgb(${cc[0]},${cc[1]},${cc[2]})`;ctx.beginPath();ctx.arc(x*scale+scale/2,y*scale+scale/2,scale*.32,0,Math.PI*2);ctx.fill()}}
+function emptyPix(w=W,h=H,bg=[0,0,0]){return Array.from({length:h},()=>Array.from({length:w},()=>bg.slice()))}
+function panelOptions(p){return [...new Set([p.address,...S.discovered].filter(Boolean))].map(a=>`<option value="${a}">${a}</option>`).join('')}function updateElapsed(){document.querySelectorAll('[data-started-at]').forEach(el=>el.textContent='Running '+elapsed(+el.dataset.startedAt))}function updateStatus(){let consoleEl=document.getElementById('console'); if(consoleEl){consoleEl.textContent=(S.messages||[]).join('\n'); consoleEl.scrollTop=consoleEl.scrollHeight} updateElapsed()}function render(){app.innerHTML=`<sl-tab-group>${S.panels.map((p,i)=>`<sl-tab slot=nav panel=p${i}>${p.name}</sl-tab><sl-tab-panel name=p${i}>${panelHtml(p,i)}</sl-tab-panel>`).join('')}</sl-tab-group><sl-button data-act=addpanel>＋ Add Panel</sl-button><h3>Status console</h3><pre id=console class=console></pre><p><a href="#" data-act=cleanup>Clean-up unused assets</a></p>`; updateStatus(); S.panels.forEach((p,i)=>{let sel=document.querySelector(`[data-act=addr][data-i="${i}"]`); if(sel)sel.value=p.address||''; preview(i)});}
+function panelHtml(p,i){return `<canvas id=prev${i} class=preview></canvas><div class=panel><div class=top><sl-button data-act=scan><sl-icon name=search></sl-icon> Scan</sl-button><select data-act=addr data-i=${i} style="width:280px">${panelOptions(p)}</select><sl-button data-act=connect data-i=${i}>${p.connected?'Disconnect':'Connect'}</sl-button><span>${p.connected?'● Connected':'○ Disconnected'}</span><sl-button data-act=clear data-i=${i}>Clear display</sl-button><label>Brightness <input type=range min=0 max=100 value=${p.brightness} data-act=brightness data-i=${i}></label></div><div class=toolbar><sl-button variant=primary data-act=play data-i=${i}><sl-icon name="${p.running?'stop-fill':'play-fill'}"></sl-icon> ${p.running?'Stop':'Play'}</sl-button><b ${p.running?`data-started-at="${p.started_at}"`:''}>${p.running?'Running '+elapsed(p.started_at):'Stopped'}</b></div><div class=frames>${p.frames.map((f,j)=>frameRow(f,i,j,p.frames.length)).join('')}</div><sl-button data-act=addframe data-i=${i}>＋ Add Frame</sl-button></div>`}
+function frameRow(f,i,j,n){return `<div class=frame><b>Frame ${j+1}</b><select data-act=type data-i=${i} data-j=${j}>${S.frame_types.map(t=>`<option value="${t}" ${t==f.frame_type?'selected':''}>${t}</option>`).join('')}</select><label>Duration <input type=number min=1 value="${f.duration}" data-act=duration data-i=${i} data-j=${j}></label><sl-button data-act=settings data-i=${i} data-j=${j}><sl-icon name=gear></sl-icon> Settings</sl-button><span style="margin-left:auto"></span><sl-button data-act=up data-i=${i} data-j=${j} ${j==0?'disabled':''}>▲</sl-button><sl-button data-act=down data-i=${i} data-j=${j} ${j==n-1?'disabled':''}>▼</sl-button><sl-button data-act=remove data-i=${i} data-j=${j} ${n==1?'disabled':''}>✖</sl-button></div>`}
+function elapsed(t){if(!t)return'';let s=Math.floor(Date.now()/1000-t),h=Math.floor(s/3600),m=Math.floor(s%3600/60);return `(${h}h ${m}m)`}
+async function preview(i){let c=document.getElementById('prev'+i); if(!c)return; let r=await api(`preview?panel=${i}`); drawCanvas(c,r.pixels,10)}
+async function save(){await api('state',{method:'POST',body:JSON.stringify(S)}); await load(true)} async function load(rerender=false){S=await api('state'); rerender?render():updateStatus()} setInterval(()=>load(false),5000); setInterval(updateElapsed,1000); setInterval(()=>S&&S.panels.forEach((_,i)=>preview(i)),500);
+document.addEventListener('input',e=>{let a=e.target.dataset.act;if(!a)return;let p=S.panels[e.target.dataset.i],f=p.frames[e.target.dataset.j]; if(a=='brightness')p.brightness=+e.target.value;if(a=='duration')f.duration=+e.target.value; save()});
+document.addEventListener('change',e=>{let a=e.target.dataset.act;if(a=='addr')S.panels[e.target.dataset.i].address=e.target.value;if(a=='type'){let f=S.panels[e.target.dataset.i].frames[e.target.dataset.j];f.frame_type=e.target.value;f.settings={}} if(a)save()});
+document.addEventListener('click',async e=>{let b=e.target.closest('[data-act]');if(!b)return;let {act,i,j}=b.dataset;if(act=='scan'){await api('scan',{method:'POST'}); setTimeout(()=>load(true),6000);} if(act=='connect'){await api(`panel/${i}/${S.panels[i].connected?'disconnect':'connect'}`,{method:'POST'}); setTimeout(()=>load(true),2500);} if(act=='play'){await api(`panel/${i}/${S.panels[i].running?'stop':'play'}`,{method:'POST'}); setTimeout(()=>load(true),1000);} if(act=='clear')await api(`panel/${i}/clear`,{method:'POST'}); if(act=='cleanup'){e.preventDefault(); await api('cleanup_assets',{method:'POST'});} if(act=='addpanel')S.panels.push({name:'Panel '+(S.panels.length+1),frames:[{frame_type:'Text',duration:10,settings:{}}],brightness:80}); if(act=='addframe')S.panels[i].frames.push({frame_type:'Text',duration:10,settings:{}}); if(act=='remove')S.panels[i].frames.splice(j,1); if(act=='up'){let a=S.panels[i].frames;[a[j],a[j-1]]=[a[j-1],a[j]]} if(act=='down'){let a=S.panels[i].frames;[a[j],a[+j+1]]=[a[+j+1],a[j]]} if(['addpanel','addframe','remove','up','down'].includes(act))await save(); if(act=='settings')openSettings(+i,+j); await load(true)});
+function input(k,v,type='text'){return `<input data-k="${k}" type=${type} value="${v??''}">`} function selected(name,val,def){return name==(val||def)?'selected':''}
+async function openSettings(i,j){edit={panel:i,frame:j};let f=S.panels[i].frames[j],s=f.settings||{},body=`<h2>${f.frame_type} settings</h2><canvas id=dialogPrev class=preview></canvas><div class=form>`; if(f.frame_type=='Text')body+=`<label>Message</label><textarea data-k=message>${s.message||'Hello'}</textarea>`; if(f.frame_type=='Date')body+=`<label>Date format</label>${input('date_format',s.date_format||'%d/%m/%Y')}`; if(f.frame_type=='Image')body+=`<label>Image file</label><span><input type=file data-upload=path accept=image/*><input data-k=path value="${s.path||''}" readonly></span><label></label><sl-button data-act=draw><sl-icon name=palette></sl-icon> Draw</sl-button><label>Image display</label><select data-k=display><option ${selected('Resize to fit',s.display,'Resize to fit')}>Resize to fit</option><option ${selected('Stretch to fit',s.display)}>Stretch to fit</option><option ${selected('Crop to fit',s.display)}>Crop to fit</option></select>`; if(['Text','Date','Clock'].includes(f.frame_type))body+=`<label>Icon</label><span><input type=file data-upload=icon_path accept=image/*><input data-k=icon_path value="${s.icon_path||''}" readonly><sl-button data-act=clearicon>Clear image</sl-button></span><label>Foreground</label>${input('foreground',rgbhex(s.foreground||[255,255,0]),'color')}<label>Background</label>${input('background',rgbhex(s.background||[0,0,0]),'color')}`; if(['Text','Date'].includes(f.frame_type))body+=`<label>Font</label><select data-k=font>${S.fonts.map(x=>`<option ${x==(s.font||'VCR OSD Mono')?'selected':''}>${x}</option>`)}</select><label>Font size</label>${input('font_size',s.font_size||16,'number')}<label>Horizontal spacing</label>${input('horizontal_spacing',s.horizontal_spacing||0,'number')}<label>Vertical offset</label>${input('vertical_offset',s.vertical_offset||0,'number')}`; if(f.frame_type=='Text')body+=`<label>Scrolling</label><select data-k=scrolling><option ${selected('None (Wrap)',s.scrolling,'None (Wrap)')}>None (Wrap)</option><option ${selected('Right to left',s.scrolling)}>Right to left</option><option ${selected('Left to right',s.scrolling)}>Left to right</option><option ${selected('Top to bottom',s.scrolling)}>Top to bottom</option><option ${selected('Bottom to top',s.scrolling)}>Bottom to top</option></select><label>Scroll speed</label>${input('scroll_speed',s.scroll_speed||4,'number')}`; if(f.frame_type=='Clock')body+=`<label>12/24 hour time</label><select data-k=time_mode><option ${selected('24-hour',s.time_mode,'24-hour')}>24-hour</option><option ${selected('12-hour',s.time_mode)}>12-hour</option></select><label>Show seconds</label><input data-k=show_seconds type=checkbox ${s.show_seconds?'checked':''}><label>Flash separator</label><input data-k=flash_separator type=checkbox ${s.flash_separator?'checked':''}><label>Digit spacing</label><input data-k=digit_spacing type=range min=0 max=10 value="${s.digit_spacing??2}"><label></label><sl-button data-act=digits>Edit digits</sl-button>`; body+=`</div><div class=toolbar><sl-button variant=primary data-act=apply>Apply</sl-button><sl-button data-act=close>Cancel</sl-button></div>`; modalBody.innerHTML=body; modal.classList.add('open'); dialogPreview();}
+function collect(){let f=S.panels[edit.panel].frames[edit.frame],s={...f.settings}; modalBody.querySelectorAll('[data-k]').forEach(x=>{let v=x.type=='checkbox'?x.checked:x.value;if(['foreground','background'].includes(x.dataset.k))v=hexrgb(v); if(['font_size','horizontal_spacing','vertical_offset','scroll_speed','digit_spacing'].includes(x.dataset.k))v=+v; s[x.dataset.k]=v}); f.settings=s;}
+async function dialogPreview(){let previewEl=document.getElementById('dialogPrev'); if(!previewEl)return; collect();let r=await api(`preview_frame`,{method:'POST',body:JSON.stringify(S.panels[edit.panel].frames[edit.frame])}); drawCanvas(previewEl,r.pixels,7)}
+modal.addEventListener('input',e=>{if(e.target.dataset.k)dialogPreview()}); modal.addEventListener('change',async e=>{let key=e.target.dataset.upload;if(!key)return;let file=e.target.files[0]; if(!file)return; let data=await readFile(file); let res=await api('upload_image',{method:'POST',body:JSON.stringify({name:file.name,data})}); modalBody.querySelector(`[data-k=${key}]`).value=res.path; dialogPreview()});
+modal.addEventListener('click',async e=>{let a=e.target.closest('[data-act]')?.dataset.act;if(a=='close')modal.classList.remove('open');if(a=='clearicon'){modalBody.querySelector('[data-k=icon_path]').value='';dialogPreview()}if(a=='apply'){collect();modal.classList.remove('open');await save()}if(a=='draw')openDraw(false);if(a=='digits')openDraw(true)});
+function readFile(file){return new Promise((res,rej)=>{let r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file)})}
+async function loadDigitPixels(name){let f=S.panels[edit.panel].frames[edit.frame],path=(f.settings.digit_overrides||{})[name];let res=await api('digit_pixels',{method:'POST',body:JSON.stringify({name,path})});drawW=res.width;drawH=res.height;drawPixels=res.pixels;drawEditor(document.getElementById('ed'),drawPixels,drawW,drawH,22)}
+function openDraw(digits){drawW=digits?8:W;drawH=digits?16:H;drawPixels=emptyPix(drawW,drawH);let colorTools=digits?'<div class=toolbar><sl-button id=clr>Clear</sl-button></div>':'<div class=toolbar><label>Background <input id=bg type=color value=#000000></label><label>Foreground <input id=fg type=color value=#ffff00></label><sl-button id=clr>Clear</sl-button></div>';modalBody.innerHTML=`<h2>${digits?'Edit clock digits':'Draw image'}</h2>${digits?'<div class=thumbs>'+['digit-0.png','digit-1.png','digit-2.png','digit-3.png','digit-4.png','digit-5.png','digit-6.png','digit-7.png','digit-8.png','digit-9.png','separator.png','am.png','pm.png'].map(x=>`<button class=thumb data-name=${x}>${x}</button>`).join('')+'</div>':''}${colorTools}<canvas id=ed class=editor></canvas><div class=toolbar><sl-button id=keep variant=primary>${digits?'Save':'Keep'}</sl-button><sl-button id=discard>Discard</sl-button></div>`;let cur='digit-0.png',edEl=document.getElementById('ed'),bgEl=document.getElementById('bg'),fgEl=document.getElementById('fg'),clrEl=document.getElementById('clr'),discardEl=document.getElementById('discard'),keepEl=document.getElementById('keep');let paint=()=>drawEditor(edEl,drawPixels,drawW,drawH,digits?22:12); paint(); if(!digits)bgEl.oninput=()=>{drawPixels=emptyPix(drawW,drawH,hexrgb(bgEl.value));paint()}; edEl.onclick=e=>{let r=edEl.getBoundingClientRect(),x=Math.floor((e.clientX-r.left)/(r.width/drawW)),y=Math.floor((e.clientY-r.top)/(r.height/drawH)); if(x>=0&&y>=0&&x<drawW&&y<drawH){if(digits){drawPixels[y][x]=drawPixels[y][x].some(v=>v)?[0,0,0]:[255,255,255]}else{drawPixels[y][x]=hexrgb(fgEl.value)}paint()}}; clrEl.onclick=()=>{drawPixels=emptyPix(drawW,drawH,digits?[0,0,0]:hexrgb(bgEl.value));paint()}; discardEl.onclick=()=>modal.classList.remove('open'); keepEl.onclick=async()=>{let res=await api(digits?'save_digit':'save_drawing',{method:'POST',body:JSON.stringify({pixels:drawPixels,name:cur})}); if(digits){let f=S.panels[edit.panel].frames[edit.frame];f.settings.digit_overrides={...(f.settings.digit_overrides||{}),[cur]:res.path}} else S.panels[edit.panel].frames[edit.frame].settings.path=res.path; modal.classList.remove('open'); await save()}; modalBody.querySelectorAll('.thumb').forEach(t=>t.onclick=async()=>{cur=t.dataset.name;await loadDigitPixels(cur)}); if(digits)loadDigitPixels(cur);}
+function rgbhex(a){return '#'+a.map(x=>x.toString(16).padStart(2,'0')).join('')} function hexrgb(h){return [1,3,5].map(i=>parseInt(h.slice(i,i+2),16))}
+load(true);
+</script></body></html>'''
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code=200, ctype="application/json", body=b""):
+        self.send_response(code); self.send_header("content-type", ctype); self.end_headers(); self.wfile.write(body)
+    def _json(self, obj, code=200): self._send(code, "application/json", json.dumps(obj).encode())
+    def _body(self): return json.loads(self.rfile.read(int(self.headers.get("content-length", 0) or 0)) or b"{}")
+    def do_GET(self):
+        u=urlparse(self.path)
+        if u.path=="/": return self._send(200,"text/html",HTML.encode())
+        if u.path.startswith('/fonts/'):
+            path=Path(__file__).parent/'fonts'/Path(u.path).name
+            return self._send(200, mimetypes.guess_type(path)[0] or 'font/ttf', path.read_bytes()) if path.exists() else self._send(404)
+        if u.path == '/static/app.css':
+            path=Path(__file__).parent/'static'/'app.css'
+            return self._send(200, 'text/css', path.read_bytes()) if path.exists() else self._send(404)
+        if u.path=="/api/state": return self._json(SERVICE.state())
+        if u.path=="/api/preview":
+            idx=int(parse_qs(u.query).get('panel',[0])[0]); tick=int(time.time()*4); img=SERVICE.last_images.get(idx) if SERVICE.panels[idx].running else None; img=img or render_frame(SERVICE.panels[idx].frames[0], tick); return self._json({"pixels": [[list(img.getpixel((x,y))) for x in range(PANEL_WIDTH)] for y in range(PANEL_HEIGHT)]})
+        self._send(404)
+    def do_POST(self):
+        u=urlparse(self.path); parts=u.path.strip('/').split('/')
         try:
-            old_connection.disconnect()
-        except Exception:
-            logger.debug("Bluetooth disconnect during reconnect failed", exc_info=True)
-        p.connection = None
-        p.connected = False
-        GLib.idle_add(self.connection_finished, p, None, f"Disconnected from {p.address}; reconnecting")
-        if not p.address:
-            return
-        new_connection = PanelConnection(p.address)
-        try:
-            new_connection.connect().result(timeout=30)
+            if u.path=="/api/state":
+                raw=self._body(); updated=[]
+                for idx, pd in enumerate(raw.get('panels',[])):
+                    existing = SERVICE.panels[idx] if idx < len(SERVICE.panels) else PanelState(pd.get('name','Panel'))
+                    existing.name = pd.get('name', existing.name)
+                    existing.address = pd.get('address')
+                    existing.brightness = int(pd.get('brightness', existing.brightness))
+                    existing.frames = [FrameConfig(FrameType(fd.get('frame_type','Text')), fd.get('duration',10), fd.get('settings',{})) for fd in pd.get('frames',[])] or [FrameConfig()]
+                    updated.append(existing)
+                SERVICE.panels = updated or [PanelState("Panel 1")]
+                SERVICE.save_state(); return self._json({"ok":True})
+            if u.path=="/api/scan":
+                threading.Thread(target=SERVICE.scan_once, daemon=True).start(); return self._json({"ok": True})
+            if u.path=="/api/upload_image":
+                data=self._body(); raw=data.get('data',''); _, _, b64=raw.partition(',')
+                safe=Path(data.get('name') or f"upload-{uuid.uuid4().hex}.png").name
+                ASSET_DIR.mkdir(parents=True, exist_ok=True); path=ASSET_DIR / f"{uuid.uuid4().hex}-{safe}"
+                path.write_bytes(base64.b64decode(b64)); return self._json({"path": str(path)})
+            if u.path=="/api/digit_pixels":
+                data=self._body(); name=Path(data.get('name') or 'digit-0.png').name; override=data.get('path')
+                path=Path(override) if override else Path(__file__).parent / 'digits' / name
+                if not path.exists(): return self._json({"error": "digit not found"}, 404)
+                src=Image.open(path).convert('RGBA'); pixels=[]
+                for y in range(src.height):
+                    row=[]
+                    for x in range(src.width):
+                        r,g,b,a=src.getpixel((x,y)); row.append([r,g,b] if a and (r or g or b) else [0,0,0])
+                    pixels.append(row)
+                return self._json({"width": src.width, "height": src.height, "pixels": pixels})
+            if u.path=="/api/cleanup_assets":
+                used=set()
+                for panel in SERVICE.panels:
+                    for frame in panel.frames:
+                        settings=frame.settings or {}
+                        for key in ("path", "icon_path"):
+                            if settings.get(key): used.add(str(Path(settings[key]).resolve()))
+                        for value in (settings.get("digit_overrides") or {}).values():
+                            if value: used.add(str(Path(value).resolve()))
+                removed=0
+                if ASSET_DIR.exists():
+                    for asset in ASSET_DIR.rglob('*'):
+                        if asset.is_file() and str(asset.resolve()) not in used:
+                            try:
+                                asset.unlink(); removed += 1
+                            except Exception:
+                                logger.debug("Unable to remove unused asset %s", asset, exc_info=True)
+                SERVICE.set_status(f"Clean-up unused assets removed {removed} file(s)")
+                return self._json({"removed": removed})
+            if u.path=="/api/preview_frame":
+                fd=self._body(); img=render_frame(FrameConfig(FrameType(fd.get('frame_type','Text')), fd.get('duration',10), fd.get('settings',{})), int(time.time()*4)); return self._json({"pixels":[[list(img.getpixel((x,y))) for x in range(PANEL_WIDTH)] for y in range(PANEL_HEIGHT)]})
+            if u.path in ("/api/save_drawing","/api/save_digit"):
+                data=self._body(); pix=data['pixels']; h=len(pix); w=len(pix[0]); img=Image.new('RGB',(w,h)); [img.putpixel((x,y), tuple(pix[y][x])) for y in range(h) for x in range(w)]
+                d=DIGIT_OVERRIDE_DIR if u.path.endswith('digit') else DRAWING_DIR; d.mkdir(parents=True, exist_ok=True); name=data.get('name') if u.path.endswith('digit') else f"drawing-{uuid.uuid4().hex}.png"; path=d/name; img.save(path); return self._json({"path":str(path)})
+            if len(parts)==4 and parts[:2]==['api','panel']:
+                idx=int(parts[2]); act=parts[3]
+                if act=='connect': SERVICE.connect(idx)
+                elif act=='disconnect': SERVICE.disconnect(idx)
+                elif act=='play': SERVICE.play(idx)
+                elif act=='stop': SERVICE.stop(idx)
+                elif act=='clear':
+                    conn=getattr(SERVICE.panels[idx], 'connection', None)
+                    if conn: conn.clear().result(timeout=15)
+                    SERVICE.set_status(f"Display cleared for {SERVICE.panels[idx].name}")
+                return self._json({"ok":True})
         except Exception as exc:
-            logger.exception("Bluetooth reconnect failed")
-            try:
-                new_connection.disconnect()
-            except Exception:
-                logger.debug("Bluetooth reconnect cleanup failed", exc_info=True)
-            GLib.idle_add(self.connection_finished, p, None, f"Bluetooth reconnect failed; see terminal: {exc}")
-            return
-        p.connection = new_connection
-        p.connected = True
-        GLib.idle_add(self.connection_finished, p, new_connection, f"Reconnected to {p.address}")
-    def clear_display(self,p):
-        black=Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0,0,0)); p.preview.set_image(black); connection=getattr(p,"connection",None)
-        if connection: threading.Thread(target=lambda: connection.clear().result(timeout=15), daemon=True).start()
-        self.set_status("Display cleared")
-    def brightness_changed(self,p,value):
-        p.brightness=value; self.save_state(); connection=getattr(p,"connection",None)
-        if connection: threading.Thread(target=lambda: connection.set_brightness(value).result(timeout=10), daemon=True).start()
+            logger.exception("API failed"); return self._json({"error":str(exc)}, 500)
+        self._send(404)
 
 def main():
-    app=Gtk.Application(application_id="uk.org.ledpanel.manager", flags=Gio.ApplicationFlags.DEFAULT_FLAGS); app.connect("activate", lambda a: MainWindow(a).present()); return app.run()
+    SERVICE.start(); server=ThreadingHTTPServer((HOST, PORT), Handler); logger.info("LED Panel Manager listening on http://%s:%s", HOST, PORT); server.serve_forever()
 if __name__ == "__main__": main()

@@ -1,0 +1,19 @@
+@font-face{font-family:LedFont;src:url('/fonts/Valencia%2012.ttf')}
+body{font-family:Inter,Arial,sans-serif;margin:24px;background:#f6f7fb;color:#18202a}
+#app{max-width:1076px}
+.top{display:flex;gap:12px;align-items:center}
+.panel{background:white;border:1px solid #d7dce4;border-radius:14px;padding:18px;margin-top:10px;min-height:400px;box-shadow:0 8px 26px #1d27330d}
+.preview,.editor{background:#111;padding:10px;border-radius:12px;width:100%;box-sizing:border-box;image-rendering:pixelated}
+.modal .preview,.modal .editor{width:max-content}
+.frames{display:grid;gap:10px}
+.frame{display:flex;gap:8px;align-items:center;border:1px solid #e1e5eb;padding:10px;border-radius:10px}
+.modal{position:fixed;inset:0;background:#0008;display:none;align-items:center;justify-content:center;z-index:20}
+.modal.open{display:flex}
+.dialog{background:white;border-radius:16px;padding:20px;max-height:90vh;overflow:auto;min-width:760px}
+.form{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:center}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap}
+.thumb{border:1px solid #cfd6df;border-radius:8px;padding:6px;cursor:pointer}
+.toolbar{display:flex;gap:10px;align-items:center;margin:10px 0}
+.console{background:#050505;color:#f8fafc;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;border-radius:12px;padding:12px;margin-top:18px;height:150px;overflow:auto;white-space:pre-wrap}
+.muted{color:#64748b}
+canvas{display:block}
