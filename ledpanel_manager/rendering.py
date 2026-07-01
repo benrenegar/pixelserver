@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import html
-import re
 import time
-import urllib.request
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .models import FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
@@ -12,7 +8,7 @@ from .models import FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
 PACKAGE_DIR = Path(__file__).parent
 FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
 DIGIT_DIRS = [PACKAGE_DIR / "digits", PACKAGE_DIR.parent / "digits"]
-CLOCK_CHARACTER_SPACING = 2
+DEFAULT_CLOCK_CHARACTER_SPACING = 2
 
 
 def discover_fonts() -> dict[str, Path]:
@@ -32,8 +28,6 @@ def discover_fonts() -> dict[str, Path]:
 
 FONT_ALIASES = discover_fonts() or {"Default": Path()}
 _SCROLLING = {"Right to left", "Left to right", "Top to bottom", "Bottom to top"}
-_feed_cache: dict[str, tuple[float, list[str]]] = {}
-_live_cache: dict[str, tuple[float, str]] = {}
 
 
 def load_font(name: str, size: int) -> ImageFont.ImageFont:
@@ -51,8 +45,9 @@ def _digit_asset_path(name: str) -> Path | None:
     return None
 
 
-def _clock_bitmap(name: str, foreground: tuple[int, int, int], background: tuple[int, int, int]) -> Image.Image | None:
-    path = _digit_asset_path(name)
+def _clock_bitmap(name: str, foreground: tuple[int, int, int], background: tuple[int, int, int], overrides: dict | None = None) -> Image.Image | None:
+    override_path = (overrides or {}).get(name)
+    path = Path(override_path) if override_path else _digit_asset_path(name)
     if path is None:
         return None
     src = Image.open(path).convert("RGBA")
@@ -218,27 +213,27 @@ def _render_bitmap_clock(settings: dict, tick: int = 0) -> Image.Image | None:
     bitmaps: list[Image.Image] = []
     for ch in parts:
         if ch == ":" and settings.get("flash_separator") and tick % 2:
-            sep = _clock_bitmap("separator.png", bg, bg)
+            sep = _clock_bitmap("separator.png", bg, bg, settings.get("digit_overrides"))
         elif ch == ":":
-            sep = _clock_bitmap("separator.png", fg, bg)
+            sep = _clock_bitmap("separator.png", fg, bg, settings.get("digit_overrides"))
         else:
-            sep = _clock_bitmap(f"digit-{ch}.png", fg, bg)
+            sep = _clock_bitmap(f"digit-{ch}.png", fg, bg, settings.get("digit_overrides"))
         if sep is None:
             return None
         bitmaps.append(sep)
     if suffix:
-        suffix_img = _clock_bitmap(suffix, fg, bg)
+        suffix_img = _clock_bitmap(suffix, fg, bg, settings.get("digit_overrides"))
         if suffix_img is None:
             return None
         bitmaps.append(suffix_img)
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
     icon_x = _paste_icon(img, _load_icon(settings.get("icon_path")))
-    total_w = sum(part.width for part in bitmaps) + CLOCK_CHARACTER_SPACING * max(0, len(bitmaps) - 1)
+    total_w = sum(part.width for part in bitmaps) + int(settings.get("digit_spacing", DEFAULT_CLOCK_CHARACTER_SPACING)) * max(0, len(bitmaps) - 1)
     x = icon_x + max(0, (PANEL_WIDTH - icon_x - total_w) // 2)
     for part in bitmaps:
         y = max(0, (PANEL_HEIGHT - part.height) // 2)
         img.paste(part, (x, y))
-        x += part.width + CLOCK_CHARACTER_SPACING
+        x += part.width + int(settings.get("digit_spacing", DEFAULT_CLOCK_CHARACTER_SPACING))
     return quantize_panel(img)
 
 
@@ -257,60 +252,19 @@ def render_clock(settings: dict, tick: int = 0) -> Image.Image:
     if settings.get("flash_separator") and tick % 2:
         text = text.replace(":", " ")
     draw = ImageDraw.Draw(img)
-    digit_w = 9
-    width = sum(4 if c == ":" else digit_w for c in text)
+    digit_w = 8
+    digit_spacing = int(settings.get("digit_spacing", DEFAULT_CLOCK_CHARACTER_SPACING))
+    glyph_widths = [4 if c == ":" else digit_w for c in text]
+    width = sum(glyph_widths) + digit_spacing * max(0, len(glyph_widths) - 1)
     x = icon_x + max(0, (PANEL_WIDTH - icon_x - width) // 2)
     for ch in text:
         if ch.isdigit():
-            draw_digit(draw, x, ch, fg); x += digit_w
+            draw_digit(draw, x, ch, fg); x += digit_w + digit_spacing
         else:
             if ch == ":":
                 draw.rectangle((x + 1, 4, x + 3, 6), fill=fg); draw.rectangle((x + 1, 10, x + 3, 12), fill=fg)
-            x += 4
+            x += 4 + digit_spacing
     return quantize_panel(img)
-
-
-def _clean_title(text: str) -> str:
-    text = html.unescape(text)
-    text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"[^\w\s.,:;!?£$€%&()\-'/]", " ", text, flags=re.UNICODE)
-    return re.sub(r"\s+", " ", text).strip()[:256]
-
-
-def fetch_feed_titles(url: str, count: int) -> list[str]:
-    if not url:
-        return ["RSS feed URL not set"]
-    cached = _feed_cache.get(url)
-    if cached and time.time() - cached[0] < 600:
-        return cached[1][:count]
-    try:
-        with urllib.request.urlopen(url, timeout=8) as response:
-            data = response.read(512_000)
-        root = ET.fromstring(data)
-        titles = [_clean_title(el.text or "") for el in root.findall(".//item/title")]
-        if not titles:
-            titles = [_clean_title(el.text or "") for el in root.findall(".//{http://www.w3.org/2005/Atom}entry/{http://www.w3.org/2005/Atom}title")]
-        titles = [t for t in titles if t][:count] or ["No RSS titles found"]
-    except Exception:
-        titles = ["RSS feed unavailable"]
-    _feed_cache[url] = (time.time(), titles)
-    return titles
-
-
-def fetch_live_text(url: str) -> str:
-    if not url:
-        return ""
-    cached = _live_cache.get(url)
-    if cached and time.time() - cached[0] < 30:
-        return cached[1]
-    try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            text = response.read(4096).decode("utf-8", errors="replace")
-        text = _clean_title(text)
-    except Exception:
-        text = "unavailable"
-    _live_cache[url] = (time.time(), text)
-    return text
 
 
 def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
@@ -323,10 +277,4 @@ def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
         return render_clock(settings, tick)
     if frame.frame_type is FrameType.DATE:
         return render_text_block(settings, time.strftime(settings.get("date_format", "%d/%m/%Y")), tick)
-    if frame.frame_type is FrameType.RSS:
-        titles = fetch_feed_titles(settings.get("feed_url", ""), int(settings.get("item_count", 5)))
-        return render_text_block(settings, titles[tick % max(1, len(titles))], tick, force_scroll=True)
-    if frame.frame_type is FrameType.LIVE_TEXT:
-        text = f"{settings.get('label', '')}: {fetch_live_text(settings.get('rest_url', ''))}".strip()
-        return render_text_block(settings, text, tick)
     return Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
