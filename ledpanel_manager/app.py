@@ -139,7 +139,7 @@ SERVICE = LedPanelService()
 HTML = r'''<!doctype html><html><head><meta charset="utf-8"><title>LED Matrix Manager</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/themes/light.css"><link rel="stylesheet" href="/static/app.css"><script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/shoelace-autoloader.js"></script></head><body>
 <div class=top><h1>LED Matrix Manager</h1></div><div id=app></div>
-<div id=modal class=modal><div class=dialog><div id=modalBody></div></div></div>
+<div id=modal class=modal><div class=dialog><div id=m9odalBody></div></div></div>
 <script>
 let S, edit={panel:0, frame:0}, drawPixels=[], drawW=96, drawH=16; const W=96,H=16, off=[39,43,49];
 const api=(p,o={})=>fetch('/api/'+p,{headers:{'content-type':'application/json'},...o}).then(r=>r.json());
