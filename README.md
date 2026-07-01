@@ -5,13 +5,13 @@ A Debian/Raspberry Pi OS web service for iPixel Color BLE LED matrix panels, tar
 ## Features
 
 - Long-running server application suitable for `systemd`.
-- Browser-based desktop UI served on port `8765` by default.
-- BLE discovery for nearby `LED_BLE_*`/iPixel devices.
+- Browser-based desktop UI served on port `8765` by default, with tabbed panel management and an inline status console.
+- BLE discovery for nearby `LED_BLE_*`/iPixel devices, including a web UI Scan button.
 - Per-panel frame playlists with Text, Image, Clock, and Date frames.
 - Automatic panel reconnects after send failures and automatic reconnect on service start when a saved panel address exists.
-- CSS LED previews using dim grey circles for off pixels.
+- Canvas LED previews using dim grey circles for off pixels.
 - Pillow-based rendering for custom clock/date/images and text preview.
-- Primitive browser pixel editor for image frames.
+- Primitive browser pixel editor for image frames, plus browser file uploads for images and icons.
 - Clock digit pixel editor with per-digit bitmap overrides and configurable digit spacing.
 
 ## Assets
