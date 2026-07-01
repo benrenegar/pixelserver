@@ -1,54 +1,96 @@
 # LED Matrix Manager
 
-A Debian/Linux GTK client for iPixel Color BLE LED matrix panels, initially targeting 16x96 panels.
+A Debian/Raspberry Pi OS web service for iPixel Color BLE LED matrix panels, targeting 16x96 panels.
 
 ## Features
 
-- GTK 4 tabbed UI for one or more panels.
-- Background BLE discovery for nearby `LED_BLE_*`/iPixel devices.
-- Per-panel frame playlists with text, image, clock, and date frames.
-- Live 16x96 pixel preview while display output is running.
+- Long-running server application suitable for `systemd`.
+- Browser-based desktop UI served on port `8765` by default.
+- BLE discovery for nearby `LED_BLE_*`/iPixel devices.
+- Per-panel frame playlists with Text, Image, Clock, and Date frames.
+- Automatic panel reconnects after send failures and automatic reconnect on service start when a saved panel address exists.
+- CSS LED previews using dim grey circles for off pixels.
 - Pillow-based rendering for custom clock/date/images and text preview.
-- BLE sender abstraction that uses `pypixelcolor` for panel updates, with the experimental bleak/raw-write transport available only when explicitly enabled for debugging.
+- Primitive browser pixel editor for image frames.
+- Clock digit pixel editor with per-digit bitmap overrides and configurable digit spacing.
 
 ## Assets
 
-Font drop-downs are populated from TTF files in either `ledpanel_manager/fonts/` or a checkout-level `fonts/` directory. Clock bitmap mode looks for `digit-0.png` through `digit-9.png`, `separator.png`, `am.png`, and `pm.png` in either `ledpanel_manager/digits/` or a checkout-level `digits/` directory. Set `CLOCK_CHARACTER_SPACING` in `ledpanel_manager/rendering.py` to adjust clock bitmap spacing; it defaults to 3 pixels.
+Font selectors are populated from TTF files in `ledpanel_manager/fonts/`. The service exposes those files as web fonts so the bundled fonts remain available to the browser UI and the Pillow renderer.
 
-## Run on Debian 13
+Clock bitmap mode looks for `digit-0.png` through `digit-9.png`, `separator.png`, `am.png`, and `pm.png` in `ledpanel_manager/digits/`. Digit edits made in the web UI are saved beneath the service config directory and override the bundled files for that frame.
 
-Debian 13 follows PEP 668, so `python3 -m pip install --user -e .` can fail with `externally-managed-environment`. Use Debian packages for runtime dependencies, then either run from the checkout or install the console script inside a virtual environment. The virtual environment option is recommended if you want the app to use `pypixelcolor`, because Debian's `/usr/bin/python3` will not automatically import packages just because a `pypixelcolor` command exists in `~/.local/bin`.
+## Run on Debian 13 / Raspberry Pi OS
 
-### Option A: run directly from the checkout
-
-```bash
-sudo apt install python3-gi gir1.2-gtk-4.0 python3-pil python3-bleak
-python3 -m ledpanel_manager.app
-```
-
-### Option B: install an editable console script in a virtual environment (recommended for pypixelcolor)
-
-`--system-site-packages` lets the venv use Debian's GTK/Pillow/bleak packages instead of trying to replace them with pip-managed copies.
+Debian 13 follows PEP 668, so use Debian packages for runtime dependencies and install only the app and `pypixelcolor` inside a virtual environment.
 
 ```bash
-sudo apt install python3-gi gir1.2-gtk-4.0 python3-pil python3-bleak python3-venv python3-setuptools
+sudo apt update
+sudo apt install python3-pil python3-bleak python3-venv python3-setuptools git
 python3 -m venv --system-site-packages .venv
 . .venv/bin/activate
 python3 -m pip install -e . --no-deps --no-build-isolation
 python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'
-python3 -c "import pypixelcolor; print(pypixelcolor.__file__)"
 ledpanel-manager
 ```
 
-Do not use `--break-system-packages` for this app; the venv approach keeps Debian's Python installation intact.
+Open `http://<raspberry-pi-hostname-or-ip>:8765/` in a desktop browser. Set `LEDPANEL_PORT` to change the port or `LEDPANEL_HOST` to change the bind address.
 
-If you already have `/home/benrenegar/.local/bin/pypixelcolor`, that confirms the command-line script is on your shell `PATH`, but it does not prove that the Python interpreter running this app can import the `pypixelcolor` module. The check above should print a path inside `.venv` (or another importable site-packages path). If it fails, run the `python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'` command again while the venv is activated.
+## Install as a systemd service
 
-The default bundled-font path is `ledpanel_manager/fonts/VCR-OSD-Mono.ttf`. Add the VCR OSD Mono TTF there to make it appear in the font selector; the app also falls back to Pillow's default bitmap font.
+From the checkout on the Raspberry Pi:
+
+```bash
+sudo useradd --system --create-home --home-dir /var/lib/ledpanel --shell /usr/sbin/nologin ledpanel || true
+sudo install -d -o ledpanel -g ledpanel /opt/ledpanel-manager
+sudo rsync -a --delete ./ /opt/ledpanel-manager/
+sudo -u ledpanel python3 -m venv --system-site-packages /opt/ledpanel-manager/.venv
+sudo -u ledpanel /opt/ledpanel-manager/.venv/bin/python -m pip install -e /opt/ledpanel-manager --no-deps --no-build-isolation
+sudo -u ledpanel /opt/ledpanel-manager/.venv/bin/python -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'
+```
+
+Create `/etc/systemd/system/ledpanel-manager.service`:
+
+```ini
+[Unit]
+Description=LED Matrix Manager web service
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+User=ledpanel
+Group=ledpanel
+WorkingDirectory=/opt/ledpanel-manager
+Environment=LEDPANEL_HOST=0.0.0.0
+Environment=LEDPANEL_PORT=8765
+Environment=LEDPANEL_CONFIG_DIR=/var/lib/ledpanel/.config/ledpanel-manager
+ExecStart=/opt/ledpanel-manager/.venv/bin/ledpanel-manager
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable and start it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ledpanel-manager.service
+sudo systemctl status ledpanel-manager.service
+```
+
+If Bluetooth permissions prevent access, add the service user to the appropriate Raspberry Pi OS Bluetooth group and restart the service:
+
+```bash
+sudo usermod -aG bluetooth ledpanel
+sudo systemctl restart ledpanel-manager.service
+```
 
 ## pypixelcolor support
 
-The app requires `pypixelcolor` for normal panel updates. The earlier built-in bleak sender is still present for debugging, but it is disabled by default because it can connect without reliably updating the panel. Prefer Option B above so `pypixelcolor` is installed into the app venv from the upstream GitHub repository.
+The app requires `pypixelcolor` for normal panel updates. The experimental bleak sender is still present for debugging, but disabled by default because it can connect without reliably updating the panel.
 
 Useful diagnostics:
 
@@ -57,12 +99,4 @@ which pypixelcolor
 python3 -c "import sys; print(sys.executable); import pypixelcolor; print(pypixelcolor.__file__)"
 ```
 
-If `which pypixelcolor` succeeds but the Python import fails, the CLI script and the running Python environment do not match. Activate `.venv` and install the module with `python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'`. The app imports `pypixelcolor.AsyncClient`, which is what the current package exports.
-
-If pip reports `BackendUnavailable: Cannot import 'hatchling.build'`, it means `pypixelcolor` needs the Hatchling build backend. Do not install `pypixelcolor` with `--no-build-isolation`; run the separate `python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'` command above so pip can create an isolated build environment and install Hatchling for that package automatically.
-
-To temporarily re-enable the experimental bleak sender for protocol debugging, launch the app with `LEDPANEL_ALLOW_BLEAK_FALLBACK=1 ledpanel-manager`.
-
-## Notes
-
-The protocol layer is intentionally isolated in `ledpanel_manager/ipixel.py` so it can be adapted as upstream projects evolve. It references pypixelcolor/iPixel-CLI and the HA iPixel protocol notes for BLE service UUIDs and device discovery naming.
+To temporarily re-enable the experimental bleak sender for protocol debugging, launch the service with `LEDPANEL_ALLOW_BLEAK_FALLBACK=1`.
