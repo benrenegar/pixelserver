@@ -328,6 +328,19 @@ def _weather_icon(condition: str, foreground: tuple[int, int, int]) -> Image.Ima
     out.paste(Image.new("RGBA", src.size, foreground + (255,)), mask=mask)
     return out
 
+def render_weather(settings: dict) -> Image.Image:
+    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    bg = tuple(settings.get("background", (0, 0, 0)))
+    condition, temp = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
+    suffix = "°"
+    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
+    icon = _weather_icon(condition, fg)
+    if icon is not None:
+        img.paste(icon.convert("RGB"), (0, 0), icon)
+    font = load_font(settings.get("font", "Avante 8"), int(settings.get("font_size", 8)))
+    text = f" {condition}. {round(temp):d}{suffix}"
+    _draw_crisp_text(img, (18, int(settings.get("vertical_offset", 0))), text, font, fg)
+    return quantize_panel(img)
 
 def render_weather(settings: dict) -> Image.Image:
     fg = tuple(settings.get("foreground", (255, 255, 0)))
