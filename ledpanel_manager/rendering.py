@@ -338,8 +338,8 @@ def render_weather(settings: dict) -> Image.Image:
     icon = _weather_icon(condition, fg)
     if icon is not None:
         img.paste(icon.convert("RGB"), (0, 0), icon)
-    font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 12)))
-    text = f"{condition} {round(temp):d}{suffix}"
+    font = load_font(settings.get("font", "Avante 8"), int(settings.get("font_size", 8)))
+    text = f" {condition}. {round(temp):d}{suffix}"
     _draw_crisp_text(img, (18, int(settings.get("vertical_offset", 0))), text, font, fg)
     return quantize_panel(img)
 
@@ -352,7 +352,7 @@ def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
     if frame.frame_type is FrameType.CLOCK:
         return render_clock(settings, tick)
     if frame.frame_type is FrameType.DATE:
-        return render_text_block(settings, time.strftime(settings.get("date_format", "%d/%m/%Y")), tick)
+        return render_text_block(settings, time.strftime(settings.get("date_format", "%a %d %b")), tick)
     if frame.frame_type is FrameType.WEATHER:
         return render_weather(settings)
     return Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
