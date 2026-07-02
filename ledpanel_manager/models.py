@@ -15,8 +15,7 @@ class FrameType(str, Enum):
     IMAGE = "Image"
     CLOCK = "Clock"
     DATE = "Date"
-    RSS = "RSS Feed"
-    LIVE_TEXT = "Live Text"
+    WEATHER = "Weather"
 
 
 @dataclass
@@ -31,7 +30,6 @@ class FrameConfig:
             "background": (0, 0, 0),
             "font": "VCR OSD Mono",
             "font_size": 16,
-            "horizontal_spacing": 0,
             "vertical_offset": 0,
             "icon_path": None,
         }
@@ -47,13 +45,13 @@ class FrameConfig:
                 "show_seconds": False,
                 "flash_separator": False,
                 "icon_path": None,
+                "digit_spacing": 2,
+                "digit_overrides": {},
             }
         if self.frame_type is FrameType.DATE:
             return text_base | {"date_format": "%d/%m/%Y"}
-        if self.frame_type is FrameType.RSS:
-            return text_base | {"feed_url": "", "item_count": 5, "scroll_speed": 4}
-        if self.frame_type is FrameType.LIVE_TEXT:
-            return text_base | {"label": "Value", "rest_url": "", "scrolling": "None (Wrap)", "scroll_speed": 4}
+        if self.frame_type is FrameType.WEATHER:
+            return text_base | {"location": "London", "units": "Celsius"}
         return text_base
 
     def merged_settings(self) -> dict[str, Any]:
@@ -71,3 +69,4 @@ class PanelState:
     frames: list[FrameConfig] = field(default_factory=lambda: [FrameConfig()])
     running: bool = False
     brightness: int = 80
+    started_at: float | None = None
