@@ -290,10 +290,15 @@ def _fetch_weather(location: str, units: str) -> tuple[str, float]:
     if not location.strip():
         return "cloudy", 0.0
     try:
-        q = urllib.parse.urlencode({"name": location, "count": 1, "language": "en", "format": "json"})
-        with urllib.request.urlopen(f"https://geocoding-api.open-meteo.com/v1/search?{q}", timeout=8) as response:
-            geo = json.loads(response.read().decode("utf-8"))
-        result = (geo.get("results") or [])[0]
+        if location.strip().isdigit():
+            q = urllib.parse.urlencode({"id": int(location.strip()), "language": "en", "format": "json"})
+            with urllib.request.urlopen(f"https://geocoding-api.open-meteo.com/v1/get?{q}", timeout=8) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        else:
+            q = urllib.parse.urlencode({"name": location, "count": 1, "language": "en", "format": "json"})
+            with urllib.request.urlopen(f"https://geocoding-api.open-meteo.com/v1/search?{q}", timeout=8) as response:
+                geo = json.loads(response.read().decode("utf-8"))
+            result = (geo.get("results") or [])[0]
         temp_unit = "fahrenheit" if units == "Fahrenheit" else "celsius"
         q = urllib.parse.urlencode({"latitude": result["latitude"], "longitude": result["longitude"], "current": "temperature_2m,weather_code", "temperature_unit": temp_unit})
         with urllib.request.urlopen(f"https://api.open-meteo.com/v1/forecast?{q}", timeout=8) as response:
@@ -328,7 +333,7 @@ def render_weather(settings: dict) -> Image.Image:
     fg = tuple(settings.get("foreground", (255, 255, 0)))
     bg = tuple(settings.get("background", (0, 0, 0)))
     condition, temp = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
-    suffix = "°F" if settings.get("units") == "Fahrenheit" else "°C"
+    suffix = "°"
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
     draw = ImageDraw.Draw(img)
     _draw_weather_icon(draw, condition, fg)
