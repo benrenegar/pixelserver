@@ -350,7 +350,7 @@ def render_weather(settings: dict) -> Image.Image:
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
     icon = _weather_icon(condition, fg)
     font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 12)))
-    text = f"{condition} {round(temp):d}{suffix}"
+    text = f"  {round(temp):d}{suffix}"
     text_w, text_h = _text_bbox(font, text)
     gap = 2 if icon is not None else 0
     icon_w = icon.width if icon is not None else 0
