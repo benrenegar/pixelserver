@@ -328,7 +328,6 @@ def _weather_icon(condition: str, foreground: tuple[int, int, int]) -> Image.Ima
     out.paste(Image.new("RGBA", src.size, foreground + (255,)), mask=mask)
     return out
 
-
 def render_weather(settings: dict) -> Image.Image:
     fg = tuple(settings.get("foreground", (255, 255, 0)))
     bg = tuple(settings.get("background", (0, 0, 0)))
@@ -343,6 +342,28 @@ def render_weather(settings: dict) -> Image.Image:
     _draw_crisp_text(img, (18, int(settings.get("vertical_offset", 0))), text, font, fg)
     return quantize_panel(img)
 
+def render_weather(settings: dict) -> Image.Image:
+    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    bg = tuple(settings.get("background", (0, 0, 0)))
+    condition, temp = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
+    suffix = "°"
+    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
+    icon = _weather_icon(condition, fg)
+    font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 12)))
+    text = f"{condition} {round(temp):d}{suffix}"
+    text_w, text_h = _text_bbox(font, text)
+    gap = 2 if icon is not None else 0
+    icon_w = icon.width if icon is not None else 0
+    total_w = icon_w + gap + text_w
+    x = max(0, (PANEL_WIDTH - total_w) // 2)
+    yoff = int(settings.get("vertical_offset", 0))
+    if icon is not None:
+        icon_y = max(0, min(PANEL_HEIGHT - icon.height, (PANEL_HEIGHT - icon.height) // 2 + yoff))
+        img.paste(icon.convert("RGB"), (x, icon_y), icon)
+    text_y = max(0, min(PANEL_HEIGHT - text_h, (PANEL_HEIGHT - text_h) // 2 + yoff))
+    _draw_crisp_text(img, (x + icon_w + gap, text_y), text, font, fg)
+    return quantize_panel(img)
+
 def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
     settings = frame.merged_settings()
     if frame.frame_type is FrameType.TEXT:
@@ -352,7 +373,7 @@ def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
     if frame.frame_type is FrameType.CLOCK:
         return render_clock(settings, tick)
     if frame.frame_type is FrameType.DATE:
-        return render_text_block(settings, time.strftime(settings.get("date_format", "%a %d %b")), tick)
+        return render_text_block(settings, time.strftime(settings.get("date_format", "%d/%m/%Y")), tick)
     if frame.frame_type is FrameType.WEATHER:
         return render_weather(settings)
     return Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
