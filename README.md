@@ -18,7 +18,7 @@ A Debian/Raspberry Pi OS web service for iPixel Color BLE LED matrix panels, tar
 
 Font selectors are populated from TTF files in `ledpanel_manager/fonts/`. The service exposes those files as web fonts so the bundled fonts remain available to the browser UI and the Pillow renderer.
 
-Clock bitmap mode looks for `digit-0.png` through `digit-9.png`, `separator.png`, `am.png`, and `pm.png` in `ledpanel_manager/digits/`. Digit edits made in the web UI are saved beneath the service config directory and override the bundled files for that frame. Web UI styles live in `ledpanel_manager/static/app.css` so deployments can customize or override the browser appearance there.
+Clock bitmap mode looks for `digit-0.png` through `digit-9.png`, `separator.png`, `am.png`, and `pm.png` in `ledpanel_manager/digits/`. Digit edits made in the web UI are saved beneath the service config directory and override the bundled files for that frame. Web UI styles live in `ledpanel_manager/static/app.css` so deployments can customize or override the browser appearance there. Weather icons live as editable 16x16 PNG files in `ledpanel_manager/static/weather-*.png`.
 
 ## Run on Debian 13 / Raspberry Pi OS
 

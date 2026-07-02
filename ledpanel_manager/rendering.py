@@ -312,21 +312,21 @@ def _fetch_weather(location: str, units: str) -> tuple[str, float]:
     return condition, temp
 
 
-def _draw_weather_icon(draw: ImageDraw.ImageDraw, condition: str, fg: tuple[int, int, int]) -> None:
-    if condition == "sunny":
-        draw.ellipse((3, 3, 12, 12), outline=fg, fill=fg)
-    elif condition == "rainy":
-        draw.ellipse((2, 4, 13, 10), outline=fg)
-        for x in (4, 8, 12): draw.line((x, 11, x - 1, 15), fill=fg)
-    elif condition == "stormy":
-        draw.ellipse((2, 4, 13, 10), outline=fg)
-        draw.polygon([(8, 8), (5, 13), (8, 12), (6, 16), (12, 9), (9, 10)], fill=fg)
-    elif condition == "snow":
-        for x, y in ((4, 5), (10, 5), (7, 10), (4, 14), (11, 13)): draw.text((x, y), "*", fill=fg)
-    elif condition == "foggy":
-        for y in (5, 8, 11, 14): draw.line((2, y, 14, y), fill=fg)
-    else:
-        draw.ellipse((2, 5, 13, 11), outline=fg, fill=None)
+def _weather_icon(condition: str, foreground: tuple[int, int, int]) -> Image.Image | None:
+    path = PACKAGE_DIR / "static" / f"weather-{condition}.png"
+    if not path.exists():
+        return None
+    src = Image.open(path).convert("RGBA").resize((16, 16), Image.Resampling.NEAREST)
+    alpha = src.getchannel("A")
+    luminance = src.convert("L")
+    mask = Image.new("L", src.size, 0)
+    for y in range(src.height):
+        for x in range(src.width):
+            visible = alpha.getpixel((x, y)) > 0 and luminance.getpixel((x, y)) >= 128
+            mask.putpixel((x, y), 255 if visible else 0)
+    out = Image.new("RGBA", src.size, (0, 0, 0, 0))
+    out.paste(Image.new("RGBA", src.size, foreground + (255,)), mask=mask)
+    return out
 
 
 def render_weather(settings: dict) -> Image.Image:
@@ -335,8 +335,9 @@ def render_weather(settings: dict) -> Image.Image:
     condition, temp = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
     suffix = "°"
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
-    draw = ImageDraw.Draw(img)
-    _draw_weather_icon(draw, condition, fg)
+    icon = _weather_icon(condition, fg)
+    if icon is not None:
+        img.paste(icon.convert("RGB"), (0, 0), icon)
     font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 12)))
     text = f"{condition} {round(temp):d}{suffix}"
     _draw_crisp_text(img, (18, int(settings.get("vertical_offset", 0))), text, font, fg)
