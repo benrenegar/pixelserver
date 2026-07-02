@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .models import FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
@@ -27,6 +30,7 @@ def discover_fonts() -> dict[str, Path]:
 
 
 FONT_ALIASES = discover_fonts() or {"Default": Path()}
+_weather_cache: dict[tuple[str, str], tuple[float, str, float]] = {}
 _SCROLLING = {"Right to left", "Left to right", "Top to bottom", "Bottom to top"}
 
 
@@ -267,6 +271,72 @@ def render_clock(settings: dict, tick: int = 0) -> Image.Image:
     return quantize_panel(img)
 
 
+
+def _weather_code_condition(code: int) -> str:
+    if code in (0, 1): return "sunny"
+    if code in (2, 3): return "cloudy"
+    if code in (45, 48): return "foggy"
+    if 51 <= code <= 67 or 80 <= code <= 82: return "rainy"
+    if 71 <= code <= 77 or 85 <= code <= 86: return "snow"
+    if 95 <= code <= 99: return "stormy"
+    return "cloudy"
+
+
+def _fetch_weather(location: str, units: str) -> tuple[str, float]:
+    key = (location.strip().lower(), units)
+    cached = _weather_cache.get(key)
+    if cached and time.time() - cached[0] < 600:
+        return cached[1], cached[2]
+    if not location.strip():
+        return "cloudy", 0.0
+    try:
+        q = urllib.parse.urlencode({"name": location, "count": 1, "language": "en", "format": "json"})
+        with urllib.request.urlopen(f"https://geocoding-api.open-meteo.com/v1/search?{q}", timeout=8) as response:
+            geo = json.loads(response.read().decode("utf-8"))
+        result = (geo.get("results") or [])[0]
+        temp_unit = "fahrenheit" if units == "Fahrenheit" else "celsius"
+        q = urllib.parse.urlencode({"latitude": result["latitude"], "longitude": result["longitude"], "current": "temperature_2m,weather_code", "temperature_unit": temp_unit})
+        with urllib.request.urlopen(f"https://api.open-meteo.com/v1/forecast?{q}", timeout=8) as response:
+            weather = json.loads(response.read().decode("utf-8"))
+        current = weather.get("current", {})
+        condition = _weather_code_condition(int(current.get("weather_code", 3)))
+        temp = float(current.get("temperature_2m", 0.0))
+    except Exception:
+        condition, temp = "cloudy", 0.0
+    _weather_cache[key] = (time.time(), condition, temp)
+    return condition, temp
+
+
+def _draw_weather_icon(draw: ImageDraw.ImageDraw, condition: str, fg: tuple[int, int, int]) -> None:
+    if condition == "sunny":
+        draw.ellipse((3, 3, 12, 12), outline=fg, fill=fg)
+    elif condition == "rainy":
+        draw.ellipse((2, 4, 13, 10), outline=fg)
+        for x in (4, 8, 12): draw.line((x, 11, x - 1, 15), fill=fg)
+    elif condition == "stormy":
+        draw.ellipse((2, 4, 13, 10), outline=fg)
+        draw.polygon([(8, 8), (5, 13), (8, 12), (6, 16), (12, 9), (9, 10)], fill=fg)
+    elif condition == "snow":
+        for x, y in ((4, 5), (10, 5), (7, 10), (4, 14), (11, 13)): draw.text((x, y), "*", fill=fg)
+    elif condition == "foggy":
+        for y in (5, 8, 11, 14): draw.line((2, y, 14, y), fill=fg)
+    else:
+        draw.ellipse((2, 5, 13, 11), outline=fg, fill=None)
+
+
+def render_weather(settings: dict) -> Image.Image:
+    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    bg = tuple(settings.get("background", (0, 0, 0)))
+    condition, temp = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
+    suffix = "°F" if settings.get("units") == "Fahrenheit" else "°C"
+    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
+    draw = ImageDraw.Draw(img)
+    _draw_weather_icon(draw, condition, fg)
+    font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 12)))
+    text = f"{condition} {round(temp):d}{suffix}"
+    _draw_crisp_text(img, (18, int(settings.get("vertical_offset", 0))), text, font, fg)
+    return quantize_panel(img)
+
 def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
     settings = frame.merged_settings()
     if frame.frame_type is FrameType.TEXT:
@@ -277,4 +347,6 @@ def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
         return render_clock(settings, tick)
     if frame.frame_type is FrameType.DATE:
         return render_text_block(settings, time.strftime(settings.get("date_format", "%d/%m/%Y")), tick)
+    if frame.frame_type is FrameType.WEATHER:
+        return render_weather(settings)
     return Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))

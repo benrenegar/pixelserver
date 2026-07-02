@@ -17,3 +17,11 @@ body{font-family:Inter,Arial,sans-serif;margin:24px;background:#f6f7fb;color:#18
 .console{background:#050505;color:#f8fafc;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;border-radius:12px;padding:12px;margin-top:18px;height:150px;overflow:auto;white-space:pre-wrap}
 .muted{color:#64748b}
 canvas{display:block}
+button{font:inherit;border:1px solid #cfd6df;border-radius:8px;background:#fff;padding:6px 10px;cursor:pointer}
+button:hover{background:#f1f5f9}
+.tabs{display:flex;gap:6px;border-bottom:1px solid #cfd6df;margin:12px 0}
+.tab{border-bottom-left-radius:0;border-bottom-right-radius:0;margin-bottom:-1px}
+.tab.active{background:#fff;border-bottom-color:#fff;font-weight:700}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+select,input,textarea{font:inherit}

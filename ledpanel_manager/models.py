@@ -15,6 +15,7 @@ class FrameType(str, Enum):
     IMAGE = "Image"
     CLOCK = "Clock"
     DATE = "Date"
+    WEATHER = "Weather"
 
 
 @dataclass
@@ -29,7 +30,6 @@ class FrameConfig:
             "background": (0, 0, 0),
             "font": "VCR OSD Mono",
             "font_size": 16,
-            "horizontal_spacing": 0,
             "vertical_offset": 0,
             "icon_path": None,
         }
@@ -50,6 +50,8 @@ class FrameConfig:
             }
         if self.frame_type is FrameType.DATE:
             return text_base | {"date_format": "%d/%m/%Y"}
+        if self.frame_type is FrameType.WEATHER:
+            return text_base | {"location": "London", "units": "Celsius"}
         return text_base
 
     def merged_settings(self) -> dict[str, Any]:
