@@ -25,3 +25,6 @@ button:hover{background:#f1f5f9}
 .tab-panel{display:none}
 .tab-panel.active{display:block}
 select,input,textarea{font:inherit}
+.palette{display:flex;gap:2px;margin:8px 0 12px;align-items:center}
+.swatch{width:30px;height:18px;border-radius:2px;padding:0;border:1px solid #334155;box-shadow:inset 0 0 0 1px #ffffff55}
+.swatch:hover{transform:translateY(-1px);background:var(--swatch)}

@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from .models import FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
+from .models import DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_FOREGROUND, FrameConfig, FrameType, PANEL_WIDTH, PANEL_HEIGHT
 
 PACKAGE_DIR = Path(__file__).parent
 FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
@@ -30,7 +30,7 @@ def discover_fonts() -> dict[str, Path]:
 
 
 FONT_ALIASES = discover_fonts() or {"Default": Path()}
-_weather_cache: dict[tuple[str, str], tuple[float, str, float]] = {}
+_weather_cache: dict[tuple[str, str], tuple[float, str | None, float | None, str | None]] = {}
 _SCROLLING = {"Right to left", "Left to right", "Top to bottom", "Bottom to top"}
 
 
@@ -98,12 +98,6 @@ def _load_icon(path: str | None) -> Image.Image | None:
     return ImageOps.contain(icon, (16, 16), Image.Resampling.LANCZOS)
 
 
-def _paste_icon(canvas: Image.Image, icon: Image.Image | None, y: int = 0) -> int:
-    if icon is None:
-        return 0
-    canvas.paste(icon.convert("RGB"), (0, max(0, y + (PANEL_HEIGHT - icon.height) // 2)), icon)
-    return 18
-
 
 def _wrap_text(text: str, font: ImageFont.ImageFont, width: int) -> list[str]:
     words = text.split() or [text]
@@ -120,50 +114,85 @@ def _wrap_text(text: str, font: ImageFont.ImageFont, width: int) -> list[str]:
         lines.append(current)
     return lines or [""]
 
+def _icon_and_text_layer(
+    settings: dict,
+    text: str,
+    font: ImageFont.ImageFont,
+    foreground: tuple[int, int, int],
+    *,
+    wrap_width: int | None = None,
+) -> Image.Image:
+    icon = _load_icon(settings.get("icon_path"))
+    gap = 2 if icon is not None and text else 0
+    if wrap_width is None:
+        lines = [text]
+    else:
+        text_width = max(1, wrap_width - ((icon.width + gap) if icon is not None else 0))
+        lines = _wrap_text(text, font, text_width)
+    line_h = max(1, _text_bbox(font, "Ag")[1] + 1)
+    text_w = max((_text_bbox(font, line)[0] for line in lines), default=0)
+    text_h = max(1, len(lines) * line_h)
+    width = (icon.width if icon is not None else 0) + gap + text_w
+    height = max(icon.height if icon is not None else 0, text_h)
+    layer = Image.new("RGBA", (max(1, width), max(1, height)), (0, 0, 0, 0))
+    x = 0
+    if icon is not None:
+        layer.paste(icon, (0, max(0, (height - icon.height) // 2)), icon)
+        x = icon.width + gap
+    y = max(0, (height - text_h) // 2)
+    for line in lines:
+        mask = Image.new("L", layer.size, 0)
+        ImageDraw.Draw(mask).text((x, y), line, font=font, fill=255)
+        mask = mask.point(lambda px: 255 if px >= 128 else 0)
+        layer.paste(Image.new("RGBA", layer.size, foreground + (255,)), mask=mask)
+        y += line_h
+    return layer
+
+
+def _paste_layer(canvas: Image.Image, layer: Image.Image, xy: tuple[int, int]) -> None:
+    canvas.paste(layer.convert("RGB"), xy, layer)
+
+
+def _center_error(text: str, bg: tuple[int, int, int]) -> Image.Image:
+    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
+    font = load_font(DEFAULT_FONT, DEFAULT_FONT_SIZE)
+    w, h = _text_bbox(font, text)
+    _draw_crisp_text(img, ((PANEL_WIDTH - w) // 2, (PANEL_HEIGHT - h) // 2), text, font, (255, 0, 0))
+    return quantize_panel(img)
+
 
 def render_text_block(settings: dict, text: str, tick: int = 0, *, force_scroll: bool = False) -> Image.Image:
-    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    fg = tuple(settings.get("foreground", DEFAULT_FOREGROUND))
     bg = tuple(settings.get("background", (0, 0, 0)))
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
-    icon_x = _paste_icon(img, _load_icon(settings.get("icon_path")))
-    font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 16)))
-    spacing = int(settings.get("horizontal_spacing", 0))
+    font = load_font(settings.get("font", DEFAULT_FONT), int(settings.get("font_size", DEFAULT_FONT_SIZE)))
     yoff = int(settings.get("vertical_offset", 0))
-    available = PANEL_WIDTH - icon_x
     scrolling = settings.get("scrolling", "None (Wrap)")
     if force_scroll:
         scrolling = "Right to left"
-    w, h = _text_bbox(font, text)
-    if scrolling in _SCROLLING:
-        speed = max(1, int(settings.get("scroll_speed", 4)))
+    horizontal = scrolling in {"Right to left", "Left to right"}
+    vertical = scrolling in {"Top to bottom", "Bottom to top"}
+    layer = _icon_and_text_layer(settings, text, font, fg, wrap_width=None if horizontal else PANEL_WIDTH)
+    speed = max(1, int(settings.get("scroll_speed", 4)))
+    if horizontal:
+        cycle = max(1, PANEL_WIDTH + layer.width)
         if scrolling == "Right to left":
-            x = icon_x + available - ((tick * speed) % max(1, available + w + spacing))
-            y = (PANEL_HEIGHT - h) // 2 + yoff
-        elif scrolling == "Left to right":
-            x = icon_x - w + ((tick * speed) % max(1, available + w + spacing))
-            y = (PANEL_HEIGHT - h) // 2 + yoff
-        elif scrolling == "Top to bottom":
-            x = icon_x + max(0, (available - w) // 2)
-            y = -h + ((tick * speed) % max(1, PANEL_HEIGHT + h)) + yoff
+            x = PANEL_WIDTH - ((tick * speed) % cycle)
         else:
-            x = icon_x + max(0, (available - w) // 2)
-            y = PANEL_HEIGHT - ((tick * speed) % max(1, PANEL_HEIGHT + h)) + yoff
-        _draw_crisp_text(img, (int(x), int(y)), text, font, fg)
-        return quantize_panel(img)
-
-    lines = _wrap_text(text, font, available)
-    line_h = max(1, _text_bbox(font, "Ag")[1] + 1)
-    total_h = min(len(lines), max(1, PANEL_HEIGHT // line_h + 1)) * line_h
-    y = (PANEL_HEIGHT - total_h) // 2 + yoff
-    for line in lines:
-        line_w, _ = _text_bbox(font, line)
-        x = icon_x + max(0, (available - line_w) // 2)
-        _draw_crisp_text(img, (x, y), line, font, fg)
-        y += line_h
-        if y >= PANEL_HEIGHT:
-            break
+            x = -layer.width + ((tick * speed) % cycle)
+        y = (PANEL_HEIGHT - layer.height) // 2 + yoff
+    elif vertical:
+        x = (PANEL_WIDTH - layer.width) // 2
+        cycle = max(1, PANEL_HEIGHT + layer.height)
+        if scrolling == "Top to bottom":
+            y = -layer.height + ((tick * speed) % cycle) + yoff
+        else:
+            y = PANEL_HEIGHT - ((tick * speed) % cycle) + yoff
+    else:
+        x = (PANEL_WIDTH - layer.width) // 2
+        y = (PANEL_HEIGHT - layer.height) // 2 + yoff
+    _paste_layer(img, layer, (int(x), int(y)))
     return quantize_panel(img)
-
 
 def fit_image(path: str | None, mode: str) -> Image.Image:
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
@@ -204,7 +233,7 @@ def draw_digit(draw: ImageDraw.ImageDraw, x: int, digit: str, color: tuple[int, 
 
 def _render_bitmap_clock(settings: dict, tick: int = 0) -> Image.Image | None:
     bg = tuple(settings.get("background", (0, 0, 0)))
-    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    fg = tuple(settings.get("foreground", DEFAULT_FOREGROUND))
     now = time.localtime()
     hour = now.tm_hour
     suffix = None
@@ -231,9 +260,14 @@ def _render_bitmap_clock(settings: dict, tick: int = 0) -> Image.Image | None:
             return None
         bitmaps.append(suffix_img)
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
-    icon_x = _paste_icon(img, _load_icon(settings.get("icon_path")))
+    icon = _load_icon(settings.get("icon_path"))
+    gap = 2 if icon is not None else 0
     total_w = sum(part.width for part in bitmaps) + int(settings.get("digit_spacing", DEFAULT_CLOCK_CHARACTER_SPACING)) * max(0, len(bitmaps) - 1)
-    x = icon_x + max(0, (PANEL_WIDTH - icon_x - total_w) // 2)
+    group_w = (icon.width if icon is not None else 0) + gap + total_w
+    x = (PANEL_WIDTH - group_w) // 2
+    if icon is not None:
+        img.paste(icon.convert("RGB"), (x, max(0, (PANEL_HEIGHT - icon.height) // 2)), icon)
+        x += icon.width + gap
     for part in bitmaps:
         y = max(0, (PANEL_HEIGHT - part.height) // 2)
         img.paste(part, (x, y))
@@ -246,9 +280,9 @@ def render_clock(settings: dict, tick: int = 0) -> Image.Image:
     if bitmap is not None:
         return bitmap
     bg = tuple(settings.get("background", (0, 0, 0)))
-    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    fg = tuple(settings.get("foreground", DEFAULT_FOREGROUND))
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
-    icon_x = _paste_icon(img, _load_icon(settings.get("icon_path")))
+    icon = _load_icon(settings.get("icon_path"))
     fmt = "%l:%M" if settings.get("time_mode") == "12-hour" else "%H:%M"
     if settings.get("show_seconds"):
         fmt += ":%S"
@@ -260,7 +294,12 @@ def render_clock(settings: dict, tick: int = 0) -> Image.Image:
     digit_spacing = int(settings.get("digit_spacing", DEFAULT_CLOCK_CHARACTER_SPACING))
     glyph_widths = [4 if c == ":" else digit_w for c in text]
     width = sum(glyph_widths) + digit_spacing * max(0, len(glyph_widths) - 1)
-    x = icon_x + max(0, (PANEL_WIDTH - icon_x - width) // 2)
+    gap = 2 if icon is not None else 0
+    group_w = (icon.width if icon is not None else 0) + gap + width
+    x = (PANEL_WIDTH - group_w) // 2
+    if icon is not None:
+        img.paste(icon.convert("RGB"), (x, max(0, (PANEL_HEIGHT - icon.height) // 2)), icon)
+        x += icon.width + gap
     for ch in text:
         if ch.isdigit():
             draw_digit(draw, x, ch, fg); x += digit_w + digit_spacing
@@ -281,24 +320,40 @@ def _weather_code_condition(code: int) -> str:
     if 95 <= code <= 99: return "stormy"
     return "cloudy"
 
+def _weather_code_condition(code: int) -> str:
+    if code in (0, 1): return "sunny"
+    if code in (2, 3): return "cloudy"
+    if code in (45, 48): return "foggy"
+    if 51 <= code <= 67 or 80 <= code <= 82: return "rainy"
+    if 71 <= code <= 77 or 85 <= code <= 86: return "snow"
+    if 95 <= code <= 99: return "stormy"
+    return "cloudy"
 
-def _fetch_weather(location: str, units: str) -> tuple[str, float]:
-    key = (location.strip().lower(), units)
+def _fetch_weather(location: str, units: str) -> tuple[str | None, float | None, str | None]:
+    normalized = location.strip()
+    if not normalized:
+        return None, None, "missing"
+    key = (normalized.lower(), units)
     cached = _weather_cache.get(key)
-    if cached and time.time() - cached[0] < 600:
-        return cached[1], cached[2]
-    if not location.strip():
-        return "cloudy", 0.0
+    if cached and time.time() - cached[0] < 1800:
+        return cached[1], cached[2], cached[3]
     try:
-        if location.strip().isdigit():
-            q = urllib.parse.urlencode({"id": int(location.strip()), "language": "en", "format": "json"})
+        if normalized.isdigit():
+            q = urllib.parse.urlencode({"id": int(normalized), "language": "en", "format": "json"})
             with urllib.request.urlopen(f"https://geocoding-api.open-meteo.com/v1/get?{q}", timeout=8) as response:
                 result = json.loads(response.read().decode("utf-8"))
         else:
-            q = urllib.parse.urlencode({"name": location, "count": 1, "language": "en", "format": "json"})
+            q = urllib.parse.urlencode({"name": normalized, "count": 1, "language": "en", "format": "json"})
             with urllib.request.urlopen(f"https://geocoding-api.open-meteo.com/v1/search?{q}", timeout=8) as response:
                 geo = json.loads(response.read().decode("utf-8"))
-            result = (geo.get("results") or [])[0]
+            results = geo.get("results") or []
+            if not results:
+                _weather_cache[key] = (time.time(), None, None, "missing")
+                return None, None, "missing"
+            result = results[0]
+        if "latitude" not in result or "longitude" not in result:
+            _weather_cache[key] = (time.time(), None, None, "missing")
+            return None, None, "missing"
         temp_unit = "fahrenheit" if units == "Fahrenheit" else "celsius"
         q = urllib.parse.urlencode({"latitude": result["latitude"], "longitude": result["longitude"], "current": "temperature_2m,weather_code", "temperature_unit": temp_unit})
         with urllib.request.urlopen(f"https://api.open-meteo.com/v1/forecast?{q}", timeout=8) as response:
@@ -306,11 +361,11 @@ def _fetch_weather(location: str, units: str) -> tuple[str, float]:
         current = weather.get("current", {})
         condition = _weather_code_condition(int(current.get("weather_code", 3)))
         temp = float(current.get("temperature_2m", 0.0))
+        status = None
     except Exception:
-        condition, temp = "cloudy", 0.0
-    _weather_cache[key] = (time.time(), condition, temp)
-    return condition, temp
-
+        condition, temp, status = None, None, "error"
+    _weather_cache[key] = (time.time(), condition, temp, status)
+    return condition, temp, status
 
 def _weather_icon(condition: str, foreground: tuple[int, int, int]) -> Image.Image | None:
     path = PACKAGE_DIR / "static" / f"weather-{condition}.png"
@@ -328,39 +383,29 @@ def _weather_icon(condition: str, foreground: tuple[int, int, int]) -> Image.Ima
     out.paste(Image.new("RGBA", src.size, foreground + (255,)), mask=mask)
     return out
 
-def render_weather(settings: dict) -> Image.Image:
-    fg = tuple(settings.get("foreground", (255, 255, 0)))
-    bg = tuple(settings.get("background", (0, 0, 0)))
-    condition, temp = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
-    suffix = "°"
-    img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
-    icon = _weather_icon(condition, fg)
-    if icon is not None:
-        img.paste(icon.convert("RGB"), (0, 0), icon)
-    font = load_font(settings.get("font", "Avante 8"), int(settings.get("font_size", 8)))
-    text = f" {condition}. {round(temp):d}{suffix}"
-    _draw_crisp_text(img, (18, int(settings.get("vertical_offset", 0))), text, font, fg)
-    return quantize_panel(img)
 
 def render_weather(settings: dict) -> Image.Image:
-    fg = tuple(settings.get("foreground", (255, 255, 0)))
+    fg = tuple(settings.get("foreground", DEFAULT_FOREGROUND))
     bg = tuple(settings.get("background", (0, 0, 0)))
-    condition, temp = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
-    suffix = "°"
+    condition, temp, status = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
+    if status == "missing":
+        return _center_error("Where?", bg)
+    if status == "error" or condition is None or temp is None:
+        return _center_error("x", bg)
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
     icon = _weather_icon(condition, fg)
-    font = load_font(settings.get("font", "VCR OSD Mono"), int(settings.get("font_size", 12)))
-    text = f"  {round(temp):d}{suffix}"
+    font = load_font(settings.get("font", DEFAULT_FONT), int(settings.get("font_size", DEFAULT_FONT_SIZE)))
+    text = f"{condition} {round(temp):d}°"
     text_w, text_h = _text_bbox(font, text)
     gap = 2 if icon is not None else 0
     icon_w = icon.width if icon is not None else 0
     total_w = icon_w + gap + text_w
-    x = max(0, (PANEL_WIDTH - total_w) // 2)
+    x = (PANEL_WIDTH - total_w) // 2
     yoff = int(settings.get("vertical_offset", 0))
     if icon is not None:
-        icon_y = max(0, min(PANEL_HEIGHT - icon.height, (PANEL_HEIGHT - icon.height) // 2 + yoff))
+        icon_y = (PANEL_HEIGHT - icon.height) // 2 + yoff
         img.paste(icon.convert("RGB"), (x, icon_y), icon)
-    text_y = max(0, min(PANEL_HEIGHT - text_h, (PANEL_HEIGHT - text_h) // 2 + yoff))
+    text_y = (PANEL_HEIGHT - text_h) // 2 + yoff
     _draw_crisp_text(img, (x + icon_w + gap, text_y), text, font, fg)
     return quantize_panel(img)
 

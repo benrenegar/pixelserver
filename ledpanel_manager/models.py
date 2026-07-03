@@ -8,6 +8,9 @@ PANEL_WIDTH = 96
 PANEL_HEIGHT = 16
 
 Color = tuple[int, int, int]
+DEFAULT_FONT = "Avante 8"
+DEFAULT_FONT_SIZE = 8
+DEFAULT_FOREGROUND: Color = (0, 255, 179)
 
 
 class FrameType(str, Enum):
@@ -26,10 +29,10 @@ class FrameConfig:
 
     def defaults(self) -> dict[str, Any]:
         text_base = {
-            "foreground": (255, 255, 0),
+            "foreground": DEFAULT_FOREGROUND,
             "background": (0, 0, 0),
-            "font": "VCR OSD Mono",
-            "font_size": 16,
+            "font": DEFAULT_FONT,
+            "font_size": DEFAULT_FONT_SIZE,
             "vertical_offset": 0,
             "icon_path": None,
         }
@@ -39,7 +42,7 @@ class FrameConfig:
             return {"path": None, "display": "Resize to fit"}
         if self.frame_type is FrameType.CLOCK:
             return {
-                "foreground": (255, 255, 0),
+                "foreground": DEFAULT_FOREGROUND,
                 "background": (0, 0, 0),
                 "time_mode": "24-hour",
                 "show_seconds": False,
@@ -70,3 +73,4 @@ class PanelState:
     running: bool = False
     brightness: int = 80
     started_at: float | None = None
+    blanked: bool = False
