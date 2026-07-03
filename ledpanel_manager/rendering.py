@@ -389,7 +389,7 @@ def render_weather(settings: dict) -> Image.Image:
     bg = tuple(settings.get("background", (0, 0, 0)))
     condition, temp, status = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
     if status == "missing":
-        return _center_error("Where?", bg)
+        return _center_error("?", bg)
     if status == "error" or condition is None or temp is None:
         return _center_error("x", bg)
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
@@ -418,7 +418,7 @@ def render_frame(frame: FrameConfig, tick: int = 0) -> Image.Image:
     if frame.frame_type is FrameType.CLOCK:
         return render_clock(settings, tick)
     if frame.frame_type is FrameType.DATE:
-        return render_text_block(settings, time.strftime(settings.get("date_format", "%d/%m/%Y")), tick)
+        return render_text_block(settings, time.strftime(settings.get("date_format", "%a %d %b")), tick)
     if frame.frame_type is FrameType.WEATHER:
         return render_weather(settings)
     return Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), (0, 0, 0))
