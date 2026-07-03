@@ -6,7 +6,7 @@
 body {
     font-family: sans-serif;
     margin: 24px;
-    background: dimgrey;
+    background: dimgrey url("bg.png");
     color: black
 }
 
