@@ -52,9 +52,9 @@ class FrameConfig:
                 "digit_overrides": {},
             }
         if self.frame_type is FrameType.DATE:
-            return text_base | {"date_format": "%d/%m/%Y"}
+            return text_base | {"date_format": "%a %d %b"}
         if self.frame_type is FrameType.WEATHER:
-            return text_base | {"location": "London", "units": "Celsius"}
+            return text_base | {"location": "2149797", "units": "Celsius"}
         return text_base
 
     def merged_settings(self) -> dict[str, Any]:
