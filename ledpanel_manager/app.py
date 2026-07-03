@@ -221,9 +221,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path.startswith('/fonts/'):
             path=Path(__file__).parent/'fonts'/Path(u.path).name
             return self._send(200, mimetypes.guess_type(path)[0] or 'font/ttf', path.read_bytes()) if path.exists() else self._send(404)
-        if u.path == '/static/app.css':
-            path=Path(__file__).parent/'static'/'app.css'
-            return self._send(200, 'text/css', path.read_bytes()) if path.exists() else self._send(404)
+        if u.path.startswith('/static/'):
+            path=Path(__file__).parent/'static'/Path(u.path).name
+            return self._send(200, mimetypes.guess_type(path)[0] or 'application/octet-stream', path.read_bytes()) if path.exists() and path.is_file() else self._send(404)
         if u.path == '/api/profile':
             CONFIG_DIR.mkdir(parents=True, exist_ok=True); ASSET_DIR.mkdir(parents=True, exist_ok=True)
             payload=io.BytesIO()
