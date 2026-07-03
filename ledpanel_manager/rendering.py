@@ -121,6 +121,7 @@ def _icon_and_text_layer(
     foreground: tuple[int, int, int],
     *,
     wrap_width: int | None = None,
+    text_y_offset: int = 0,
 ) -> Image.Image:
     icon = _load_icon(settings.get("icon_path"))
     gap = 2 if icon is not None and text else 0
@@ -133,13 +134,13 @@ def _icon_and_text_layer(
     text_w = max((_text_bbox(font, line)[0] for line in lines), default=0)
     text_h = max(1, len(lines) * line_h)
     width = (icon.width if icon is not None else 0) + gap + text_w
-    height = max(icon.height if icon is not None else 0, text_h)
+    height = max(PANEL_HEIGHT if icon is not None else 0, text_h + abs(text_y_offset))
     layer = Image.new("RGBA", (max(1, width), max(1, height)), (0, 0, 0, 0))
     x = 0
     if icon is not None:
         layer.paste(icon, (0, max(0, (height - icon.height) // 2)), icon)
         x = icon.width + gap
-    y = max(0, (height - text_h) // 2)
+    y = (height - text_h) // 2 + text_y_offset
     for line in lines:
         mask = Image.new("L", layer.size, 0)
         ImageDraw.Draw(mask).text((x, y), line, font=font, fill=255)
@@ -172,7 +173,7 @@ def render_text_block(settings: dict, text: str, tick: int = 0, *, force_scroll:
         scrolling = "Right to left"
     horizontal = scrolling in {"Right to left", "Left to right"}
     vertical = scrolling in {"Top to bottom", "Bottom to top"}
-    layer = _icon_and_text_layer(settings, text, font, fg, wrap_width=None if horizontal else PANEL_WIDTH)
+    layer = _icon_and_text_layer(settings, text, font, fg, wrap_width=None if horizontal else PANEL_WIDTH, text_y_offset=yoff)
     speed = max(1, int(settings.get("scroll_speed", 4)))
     if horizontal:
         cycle = max(1, PANEL_WIDTH + layer.width)
@@ -180,17 +181,17 @@ def render_text_block(settings: dict, text: str, tick: int = 0, *, force_scroll:
             x = PANEL_WIDTH - ((tick * speed) % cycle)
         else:
             x = -layer.width + ((tick * speed) % cycle)
-        y = (PANEL_HEIGHT - layer.height) // 2 + yoff
+        y = (PANEL_HEIGHT - layer.height) // 2
     elif vertical:
         x = (PANEL_WIDTH - layer.width) // 2
         cycle = max(1, PANEL_HEIGHT + layer.height)
         if scrolling == "Top to bottom":
-            y = -layer.height + ((tick * speed) % cycle) + yoff
+            y = -layer.height + ((tick * speed) % cycle)
         else:
-            y = PANEL_HEIGHT - ((tick * speed) % cycle) + yoff
+            y = PANEL_HEIGHT - ((tick * speed) % cycle)
     else:
         x = (PANEL_WIDTH - layer.width) // 2
-        y = (PANEL_HEIGHT - layer.height) // 2 + yoff
+        y = (PANEL_HEIGHT - layer.height) // 2
     _paste_layer(img, layer, (int(x), int(y)))
     return quantize_panel(img)
 
@@ -395,7 +396,7 @@ def render_weather(settings: dict) -> Image.Image:
     x = (PANEL_WIDTH - total_w) // 2
     yoff = int(settings.get("vertical_offset", 0))
     if icon is not None:
-        icon_y = (PANEL_HEIGHT - icon.height) // 2 + yoff
+        icon_y = (PANEL_HEIGHT - icon.height) // 2
         img.paste(icon.convert("RGB"), (x, icon_y), icon)
     text_y = (PANEL_HEIGHT - text_h) // 2 + yoff
     _draw_crisp_text(img, (x + icon_w + gap, text_y), text, font, fg)
