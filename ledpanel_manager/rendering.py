@@ -320,14 +320,6 @@ def _weather_code_condition(code: int) -> str:
     if 95 <= code <= 99: return "stormy"
     return "cloudy"
 
-def _weather_code_condition(code: int) -> str:
-    if code in (0, 1): return "sunny"
-    if code in (2, 3): return "cloudy"
-    if code in (45, 48): return "foggy"
-    if 51 <= code <= 67 or 80 <= code <= 82: return "rainy"
-    if 71 <= code <= 77 or 85 <= code <= 86: return "snow"
-    if 95 <= code <= 99: return "stormy"
-    return "cloudy"
 
 def _fetch_weather(location: str, units: str) -> tuple[str | None, float | None, str | None]:
     normalized = location.strip()
@@ -389,7 +381,7 @@ def render_weather(settings: dict) -> Image.Image:
     bg = tuple(settings.get("background", (0, 0, 0)))
     condition, temp, status = _fetch_weather(settings.get("location", ""), settings.get("units", "Celsius"))
     if status == "missing":
-        return _center_error("?", bg)
+        return _center_error("Where?", bg)
     if status == "error" or condition is None or temp is None:
         return _center_error("x", bg)
     img = Image.new("RGB", (PANEL_WIDTH, PANEL_HEIGHT), bg)
