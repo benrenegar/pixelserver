@@ -53,12 +53,12 @@ body>.top {
 
 .panel {
     background: white;
-    border: 1px solid black;
-    border-radius: 14px;
+    border: 2px groove #fff;
+    border-radius: 10px;
     padding: 18px;
     margin-top: 10px;
     min-height: 400px;
-    box-shadow: 4px 4px 0 black;
+    /* box-shadow: 4px 4px 0 black; */
 }
 
 canvas.preview {
@@ -199,8 +199,9 @@ canvas.preview {
 
 .panel>.toolbar>button {
     font-size: 1.5rem;
-    padding-left: 1rem;
-    padding-right: 1rem;
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+    background-color: cornflowerblue;
 }
 
 .panel>.toolbar>b {
@@ -247,11 +248,15 @@ textarea {
     font-weight: bold;
     border: 1px solid black;
     box-shadow: 2px 2px 0 black;
-    border-radius: 8px;
+    border-radius: 4px;
     background: slategray;
     color: white;
-    padding: 6px 10px;
+    padding: 7px 10px;
     cursor: pointer
+}
+
+button {
+    border: none;
 }
 
 button:focus {
@@ -311,7 +316,7 @@ button[disabled] {
     gap: 6px;
     background: gainsboro;
     padding: 0 10px 0;
-    border-bottom: 1px solid black;
+    border-bottom: 2px ridge #999;
     margin: 0;
 }
 
@@ -323,7 +328,7 @@ button[disabled] {
     border: 1px solid black;
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
-    margin-bottom: -1px
+    margin-bottom: -2px
 }
 
 .tab.active {
@@ -335,7 +340,8 @@ button[disabled] {
 .tab-panel {
     display: none;
     padding: 20px;
-    background: cornsilk
+    background: cornsilk;
+    border-bottom: 2px groove #999;
 }
 
 .tab-panel.active {
