@@ -178,14 +178,17 @@ canvas.preview {
 .thumbs {
     display: flex;
     gap: 8px;
-    flex-wrap: wrap
+    flex-wrap: wrap;
+    background: gainsboro;
+    padding: 20px 20px 0;
 }
 
 .thumb {
-    border: 1px solid #cfd6df;
-    border-radius: 8px;
-    padding: 6px;
-    cursor: pointer
+    border: 1px solid black;
+    cursor: pointer;
+    background: none;
+    padding: 0;
+    border-radius: 0;
 }
 
 .toolbar {
