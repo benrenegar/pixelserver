@@ -12,6 +12,9 @@ PACKAGE_DIR = Path(__file__).parent
 FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
 DIGIT_DIRS = [PACKAGE_DIR / "digits", PACKAGE_DIR.parent / "digits"]
 DEFAULT_CLOCK_CHARACTER_SPACING = 2
+CLOCK_DIGIT_WIDTH = 12
+CLOCK_SEPARATOR_WIDTH = 6
+CLOCK_DIGIT_HEIGHT = 16
 
 
 def discover_fonts() -> dict[str, Path]:
@@ -55,6 +58,10 @@ def _clock_bitmap(name: str, foreground: tuple[int, int, int], background: tuple
     if path is None:
         return None
     src = Image.open(path).convert("RGBA")
+    target_width = CLOCK_SEPARATOR_WIDTH if name == "separator.png" else CLOCK_DIGIT_WIDTH
+    target_size = (target_width, CLOCK_DIGIT_HEIGHT)
+    if src.size != target_size:
+        src = src.resize(target_size, Image.Resampling.NEAREST)
     alpha = src.getchannel("A")
     luminance = src.convert("L")
     mask = Image.new("L", src.size, 0)
@@ -221,7 +228,7 @@ SEGMENTS = {
 
 def draw_digit(draw: ImageDraw.ImageDraw, x: int, digit: str, color: tuple[int, int, int]):
     segs = SEGMENTS.get(digit, "")
-    y = 0; w = 8; h = 15; t = 3
+    y = 0; w = CLOCK_DIGIT_WIDTH; h = CLOCK_DIGIT_HEIGHT; t = 3
     rects = {
         "a": (x + t, y, x + w - t, y + t - 1), "b": (x + w - t, y + t, x + w - 1, y + h // 2),
         "c": (x + w - t, y + h // 2, x + w - 1, y + h - t), "d": (x + t, y + h - t, x + w - t, y + h - 1),
@@ -291,9 +298,9 @@ def render_clock(settings: dict, tick: int = 0) -> Image.Image:
     if settings.get("flash_separator") and tick % 2:
         text = text.replace(":", " ")
     draw = ImageDraw.Draw(img)
-    digit_w = 8
+    digit_w = CLOCK_DIGIT_WIDTH
     digit_spacing = int(settings.get("digit_spacing", DEFAULT_CLOCK_CHARACTER_SPACING))
-    glyph_widths = [4 if c == ":" else digit_w for c in text]
+    glyph_widths = [CLOCK_SEPARATOR_WIDTH if c == ":" else digit_w for c in text]
     width = sum(glyph_widths) + digit_spacing * max(0, len(glyph_widths) - 1)
     gap = 2 if icon is not None else 0
     group_w = (icon.width if icon is not None else 0) + gap + width
@@ -306,8 +313,8 @@ def render_clock(settings: dict, tick: int = 0) -> Image.Image:
             draw_digit(draw, x, ch, fg); x += digit_w + digit_spacing
         else:
             if ch == ":":
-                draw.rectangle((x + 1, 4, x + 3, 6), fill=fg); draw.rectangle((x + 1, 10, x + 3, 12), fill=fg)
-            x += 4 + digit_spacing
+                draw.rectangle((x + 2, 4, x + 3, 6), fill=fg); draw.rectangle((x + 2, 10, x + 3, 12), fill=fg)
+            x += CLOCK_SEPARATOR_WIDTH + digit_spacing
     return quantize_panel(img)
 
 
