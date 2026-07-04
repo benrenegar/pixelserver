@@ -1,44 +1,58 @@
 # LED Matrix Manager
 
-A Debian/Raspberry Pi OS web service for iPixel Color BLE LED matrix panels, targeting 16x96 panels.
+A Python web service for iPixel Color BLE LED matrix panels. 
+
+<img width="1362" height="1033" alt="Screenshot_2026-07-04_17-34-10" src="https://github.com/user-attachments/assets/030d3782-c07a-4eaa-bb11-d35182670ca5" />
+
 
 ## Features
 
-- Long-running server application suitable for `systemd`.
-- Browser-based desktop UI served on port `8765` by default, with tabbed panel management and an inline status console.
-- BLE discovery for nearby `LED_BLE_*`/iPixel devices, including a web UI Scan button.
-- Per-panel frame playlists with Text, Image, Clock, and Date frames.
-- Automatic panel reconnects after send failures and automatic reconnect on service start when a saved panel address exists.
-- Canvas LED previews using dim grey circles for off pixels.
-- Pillow-based rendering for custom clock/date/images and text preview.
-- Primitive browser pixel editor for image frames, plus browser file uploads for images and icons.
-- Clock digit pixel editor with per-digit bitmap overrides and configurable digit spacing.
+- Runs as a server application with discovery and connection to one or more iPixel Color BLE LED matrix panels.
+- Exposes a web application for managing panel output with features including:
+  - Playlist management with import and export
+  - Text - scrolling text (horizontally and vertically), different fonts and sizes
+  - Image - upload an image or draw
+  - Clock - with editable digits
+  - Date - custom formatting
+  - Weather - icon and text for current condition and temperature for specified location
+  - Icon, font and color customization
+  - Complete icon and image pixel editor
+ 
+<img width="905" height="799" alt="Screenshot_2026-07-04_17-40-38" src="https://github.com/user-attachments/assets/2f9d2496-3c1e-4f58-8bdd-47c9b07c172c" />
+
+<img width="1299" height="615" alt="Screenshot_2026-07-04_17-39-16" src="https://github.com/user-attachments/assets/945835fb-2335-47dd-99d9-4f622977b477" />
+
+<img width="1336" height="464" alt="Screenshot_2026-07-04_17-38-05" src="https://github.com/user-attachments/assets/3662c401-8f5a-414f-a29a-17c66ba8dd28" />
 
 ## Assets
 
-Font selectors are populated from TTF files in `ledpanel_manager/fonts/`. The service exposes those files as web fonts so the bundled fonts remain available to the browser UI and the Pillow renderer.
+Any TTF font can be placed in the fonts/ directory and will be available for selection in the web application. A collection of good pixel fonts is provided.
+Custom weather icons and clock digits can be provided as 2-bit PNG image files.
 
-Clock bitmap mode looks for `digit-0.png` through `digit-9.png`, `separator.png`, `am.png`, and `pm.png` in `ledpanel_manager/digits/`. Digit edits made in the web UI are saved beneath the service config directory and override the bundled files for that frame. Web UI styles live in `ledpanel_manager/static/app.css` so deployments can customize or override the browser appearance there. Weather icons live as editable 16x16 PNG files in `ledpanel_manager/static/weather-*.png`.
+## Running on Debian based Linux
 
-## Run on Debian 13 / Raspberry Pi OS
-
-Debian 13 follows PEP 668, so use Debian packages for runtime dependencies and install only the app and `pypixelcolor` inside a virtual environment.
-
+### Install dependenices
 ```bash
 sudo apt update
 sudo apt install python3-pil python3-bleak python3-venv python3-setuptools git
+```
+
+### Run application
+
+Execute `run.sh` or manually:
+
+```bash
 python3 -m venv --system-site-packages .venv
 . .venv/bin/activate
 python3 -m pip install -e . --no-deps --no-build-isolation
 python3 -m pip install 'pypixelcolor @ git+https://github.com/lucagoc/pypixelcolor.git'
 ledpanel-manager
 ```
+Open `http://localhost:8765/` in a desktop browser. Set `LEDPANEL_PORT` to change the port or `LEDPANEL_HOST` to change the bind address.
 
-Open `http://<raspberry-pi-hostname-or-ip>:8765/` in a desktop browser. Set `LEDPANEL_PORT` to change the port or `LEDPANEL_HOST` to change the bind address.
+## Install application as a systemd service
 
-## Install as a systemd service
-
-From the checkout on the Raspberry Pi:
+From the checkout:
 
 ```bash
 sudo useradd --system --create-home --home-dir /var/lib/ledpanel --shell /usr/sbin/nologin ledpanel || true
@@ -81,22 +95,13 @@ sudo systemctl enable --now ledpanel-manager.service
 sudo systemctl status ledpanel-manager.service
 ```
 
-If Bluetooth permissions prevent access, add the service user to the appropriate Raspberry Pi OS Bluetooth group and restart the service:
+If Bluetooth permissions prevent access, add the service user to the appropriate bluetooth user group and restart the service:
 
 ```bash
 sudo usermod -aG bluetooth ledpanel
 sudo systemctl restart ledpanel-manager.service
 ```
 
-## pypixelcolor support
+## pypixelcolor dependency
 
-The app requires `pypixelcolor` for normal panel updates. The experimental bleak sender is still present for debugging, but disabled by default because it can connect without reliably updating the panel.
-
-Useful diagnostics:
-
-```bash
-which pypixelcolor
-python3 -c "import sys; print(sys.executable); import pypixelcolor; print(pypixelcolor.__file__)"
-```
-
-To temporarily re-enable the experimental bleak sender for protocol debugging, launch the service with `LEDPANEL_ALLOW_BLEAK_FALLBACK=1`.
+The app requires `pypixelcolor` for normal panel updates, it is pulled in automatically when creating the virtual environment.
