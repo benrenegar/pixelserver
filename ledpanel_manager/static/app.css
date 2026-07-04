@@ -21,7 +21,7 @@ body>.top {
     display: flex;
     gap: 0px;
     align-items: center;
-    background: dimgrey;
+    background: transparent;
     padding: 0 10px;
     color: white;
 }
@@ -47,8 +47,13 @@ body>.top {
     line-height: 2rem;
 }
 
+.top>label input {
+    float: right;
+    margin-left: 10px;
+}
+
 #app {
-    background: lightgray;
+    background: transparent;
 }
 
 .panel {
@@ -105,7 +110,7 @@ canvas.preview {
 .modal {
     position: fixed;
     inset: 0;
-    background: #0008;
+    background: #0005;
     display: none;
     align-items: center;
     justify-content: center;
@@ -119,10 +124,12 @@ canvas.preview {
 .dialog {
     background: white;
     border-radius: 16px;
-    padding: 0;
+    padding: 1px;
     max-height: 90vh;
     overflow: auto;
-    min-width: 760px
+    min-width: 760px;
+    box-shadow: 7px 7px 0 black;
+    border: 1px solid black;
 }
 
 .dialog h2 {
@@ -131,6 +138,7 @@ canvas.preview {
     padding: 20px;
     text-shadow: -1px -1px 0 #222, 1px 1px 0 #999;
     color: #555;
+    border-radius: 15px 15px 0 0;
 }
 
 .dialog h2+canvas {
@@ -189,6 +197,11 @@ canvas.preview {
     padding: 5px;
 }
 
+body > .toolbar {
+    background: transparent;
+    padding: 0;
+}
+
 .panel>.toolbar {
     border-radius: 10px;
     justify-content: flex-start;
@@ -202,6 +215,7 @@ canvas.preview {
     padding-left: 1.25rem;
     padding-right: 1.25rem;
     background-color: cornflowerblue;
+    font-weight: bold;
 }
 
 .panel>.toolbar>b {
@@ -222,7 +236,8 @@ canvas.preview {
     padding: 12px;
     height: 150px;
     overflow: auto;
-    white-space: pre-wrap
+    white-space: pre-wrap;
+    border-radius: 5px;
 }
 
 .muted {
@@ -257,6 +272,7 @@ textarea {
 
 button {
     border: none;
+    font-weight: normal;
 }
 
 button:focus {
@@ -281,6 +297,14 @@ select:focus,
 textarea:focus {
     outline: 2px solid gold;
     box-shadow: none;
+}
+
+input[type="checkbox"] {
+    box-shadow: none;
+    cursor: pointer;
+}
+input[type="checkbox"]:focus {
+    outline: none;
 }
 
 input[type="range"] {
@@ -314,34 +338,38 @@ button[disabled] {
 .tabs {
     display: flex;
     gap: 6px;
-    background: gainsboro;
+    background: transparent;
     padding: 0 10px 0;
-    border-bottom: 2px ridge #999;
     margin: 0;
 }
 
 .tab {
     box-shadow: none;
-    color: black;
+    color: white;
     font-size: 1.25rem;
     padding: 5px 15px;
     border: 1px solid black;
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
-    margin-bottom: -2px
+    margin-bottom: -1px;
+    box-shadow: 2px 0px 0 black;
 }
 
 .tab.active {
     background: cornsilk;
     border-bottom-color: cornsilk;
-    font-weight: 700
+    font-weight: 700;
+    color: black;
+
 }
 
 .tab-panel {
     display: none;
     padding: 20px;
     background: cornsilk;
-    border-bottom: 2px groove #999;
+    border: 1px solid black;
+    box-shadow: 4px 4px 0 black;
+    border-radius: 5px;
 }
 
 .tab-panel.active {
@@ -359,18 +387,19 @@ button[disabled] {
     flex: 1 1 0;
     height: 2rem;
     padding: 0;
-    border: 1px solid black;
+    border: 1px solid white;
     box-shadow: none;
     border-radius: 0
 }
+.swatch:first-child { border-left: none; }
+.swatch:last-child { border-right: none }
 
 .swatch+.swatch {
     border-left: 0;
 }
 
 .swatch:hover {
-    ;
-    background: var(--swatch)
+    
 }
 
 button[data-act='addframe'] {
@@ -379,11 +408,12 @@ button[data-act='addframe'] {
 
 button[data-act='addpanel'] {
     margin: 20px;
+    margin-left: 0;
 }
 
 button[data-act='addpanel']+h3 {
     font-size: 1.25rem;
-    background: dimgrey;
+    background: transparent;
     color: #555;
     margin: 0;
     padding: 10px;
@@ -391,7 +421,7 @@ button[data-act='addpanel']+h3 {
 }
 
 .console+p {
-    background: dimgrey;
+    background: transparent;
     margin: 0;
     padding: 10px 10px;
 }
