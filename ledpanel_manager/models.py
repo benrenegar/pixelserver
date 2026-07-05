@@ -48,6 +48,7 @@ class FrameConfig:
                 "show_seconds": False,
                 "flash_separator": False,
                 "icon_path": None,
+                "digit_style": "7segment",
                 "digit_spacing": 2,
                 "digit_overrides": {},
             }
