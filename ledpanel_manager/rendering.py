@@ -11,6 +11,8 @@ from .models import DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_FOREGROUND, FrameCo
 PACKAGE_DIR = Path(__file__).parent
 FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
 DIGIT_DIRS = [PACKAGE_DIR / "digits", PACKAGE_DIR.parent / "digits"]
+CLOCK_DIGIT_STYLES = ("7segment", "block", "elektronika", "sans")
+DEFAULT_CLOCK_DIGIT_STYLE = "7segment"
 DEFAULT_CLOCK_CHARACTER_SPACING = 2
 CLOCK_DIGIT_WIDTH = 12
 CLOCK_SEPARATOR_WIDTH = 6
@@ -44,17 +46,24 @@ def load_font(name: str, size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _digit_asset_path(name: str) -> Path | None:
+def _digit_asset_path(name: str, style: str | None = None) -> Path | None:
+    styles = [style or DEFAULT_CLOCK_DIGIT_STYLE, DEFAULT_CLOCK_DIGIT_STYLE]
     for digit_dir in DIGIT_DIRS:
-        path = digit_dir / name
-        if path.exists():
-            return path
+        for candidate_style in dict.fromkeys(styles):
+            if candidate_style not in CLOCK_DIGIT_STYLES:
+                continue
+            path = digit_dir / candidate_style / name
+            if path.exists():
+                return path
+        legacy_path = digit_dir / name
+        if legacy_path.exists():
+            return legacy_path
     return None
 
 
-def _clock_bitmap(name: str, foreground: tuple[int, int, int], background: tuple[int, int, int], overrides: dict | None = None) -> Image.Image | None:
+def _clock_bitmap(name: str, foreground: tuple[int, int, int], background: tuple[int, int, int], overrides: dict | None = None, style: str | None = None) -> Image.Image | None:
     override_path = (overrides or {}).get(name)
-    path = Path(override_path) if override_path else _digit_asset_path(name)
+    path = Path(override_path) if override_path else _digit_asset_path(name, style)
     if path is None:
         return None
     src = Image.open(path).convert("RGBA")
@@ -254,16 +263,16 @@ def _render_bitmap_clock(settings: dict, tick: int = 0) -> Image.Image | None:
     bitmaps: list[Image.Image] = []
     for ch in parts:
         if ch == ":" and settings.get("flash_separator") and tick % 2:
-            sep = _clock_bitmap("separator.png", bg, bg, settings.get("digit_overrides"))
+            sep = _clock_bitmap("separator.png", bg, bg, settings.get("digit_overrides"), settings.get("digit_style"))
         elif ch == ":":
-            sep = _clock_bitmap("separator.png", fg, bg, settings.get("digit_overrides"))
+            sep = _clock_bitmap("separator.png", fg, bg, settings.get("digit_overrides"), settings.get("digit_style"))
         else:
-            sep = _clock_bitmap(f"digit-{ch}.png", fg, bg, settings.get("digit_overrides"))
+            sep = _clock_bitmap(f"digit-{ch}.png", fg, bg, settings.get("digit_overrides"), settings.get("digit_style"))
         if sep is None:
             return None
         bitmaps.append(sep)
     if suffix:
-        suffix_img = _clock_bitmap(suffix, fg, bg, settings.get("digit_overrides"))
+        suffix_img = _clock_bitmap(suffix, fg, bg, settings.get("digit_overrides"), settings.get("digit_style"))
         if suffix_img is None:
             return None
         bitmaps.append(suffix_img)
