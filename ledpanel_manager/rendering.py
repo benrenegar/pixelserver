@@ -11,7 +11,7 @@ from .models import DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_FOREGROUND, FrameCo
 PACKAGE_DIR = Path(__file__).parent
 FONT_DIRS = [PACKAGE_DIR / "fonts", PACKAGE_DIR.parent / "fonts"]
 DIGIT_DIRS = [PACKAGE_DIR / "digits", PACKAGE_DIR.parent / "digits"]
-CLOCK_DIGIT_STYLES = ("7segment", "block", "elektronika", "sans")
+CLOCK_DIGIT_STYLES = ("7segment", "block", "elektronika", "sans", "bigsquare")
 DEFAULT_CLOCK_DIGIT_STYLE = "7segment"
 DEFAULT_CLOCK_CHARACTER_SPACING = 2
 CLOCK_DIGIT_WIDTH = 12
